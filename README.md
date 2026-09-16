@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen)
+![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
 
 </div>
@@ -574,8 +574,9 @@ coverage run -m pytest -o addopts= && coverage report
 > 属环境约束而非项目缺陷。判据是单独运行该文件应当通过（`pytest tests/test_server_api.py -q`）；
 > CI 运行在 `ubuntu-latest`，不受此限。
 
-CI 状态徽章未放入本 README：动态徽章需要真实的仓库路径（`OWNER/REPO`），而仓库尚未建立。
-`.github/workflows/ci.yml` 已就位，首次推送后按 GitHub 提示复制徽章 Markdown 即可启用。
+README 顶部的 Tests 徽章为真实 CI 状态（`qingfeng092802/TideShift` 的 `ci.yml` 工作流）：
+PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触发跑全量 + 覆盖率。
+**发版门槛 = 手动触发的全量回归通过**（Actions 页 → tests → Run workflow）。
 
 | 测试文件 | 覆盖内容 |
 |----------|----------|
