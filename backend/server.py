@@ -595,7 +595,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="储能调度系统 API", lifespan=lifespan)
-AUTH = auth_mod.AuthStore()
+try:
+    AUTH = auth_mod.AuthStore()
+except auth_mod.AuthConfigError as _auth_cfg_err:
+    # 认证配置错误在**启动时**暴露，而不是等到用户打开登录页才发现。
+    # 这里不抛堆栈：给一条可执行的提示 + 明确的退出码（2 = 配置错误）。
+    print("=" * 62, file=sys.stderr)
+    print("[启动失败] 认证配置不完整", file=sys.stderr)
+    print("=" * 62, file=sys.stderr)
+    print(str(_auth_cfg_err), file=sys.stderr)
+    print("=" * 62, file=sys.stderr)
+    raise SystemExit(2)
 
 # P0-02：/api/* 统一 JWT 认证（静态资源与 /api/auth/login、/api/system-info 豁免）
 _AUTH_EXEMPT = {"/api/auth/login", "/api/system-info"}

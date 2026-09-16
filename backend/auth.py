@@ -20,6 +20,7 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
 import time
 from typing import Optional
 
@@ -49,6 +50,18 @@ class AuthModeError(RuntimeError):
     """
 
 
+class AuthConfigError(RuntimeError):
+    """认证配置不完整，服务**拒绝启动**（而非带病运行）。
+
+    当前唯一触发条件：`ENERGY_AUTH_MODE=env` 但 `ADMIN_INITIAL_PASSWORD` 为空。
+
+    该语义是刻意定死的三选一里的一个：
+      - **不**静默回退 `persistent`（会让用户以为 env 生效了，实际写盘）；
+      - **不**每次启动生成随机口令（口令会随重启变化，且只打印一次，无法运维）；
+      - 而是**拒绝启动**并在提示里说明改法——配置错误在启动时暴露，比在登录页暴露好。
+    """
+
+
 def auth_mode() -> str:
     """解析认证模式；非法值回退 persistent 并告警（不因配置写错而拒绝启动）。"""
     raw = (os.environ.get("ENERGY_AUTH_MODE") or "").strip().lower()
@@ -66,6 +79,36 @@ def env_password() -> str:
     return (os.environ.get("ADMIN_INITIAL_PASSWORD") or "").strip()
 
 
+def _harden_permissions(path: str) -> bool:
+    """把文件访问收敛到"仅当前用户"。返回是否**真正生效**（而非尽力而为）。
+
+    为什么要单独一个函数：`os.chmod(0o600)` 只在 POSIX 上是权限边界。
+    **Windows 上 `os.chmod` 只能切换只读位**，实测 `0o600` 写完后 `stat` 仍是 `0o666`
+    ——也就是说在 Windows 上"0600 的一次性口令文件"这个说法不成立，文件对同机其他用户
+    依然可读。因此在 Windows 上额外用 `icacls` 显式收紧 ACL：
+        icacls <file> /inheritance:r /grant:r "<user>:F"
+    切断继承、只给当前用户完全控制（保留 F 而非 R，否则后续 _atomic_write 的
+    os.replace 会因为无权删除目标文件而失败）。
+
+    icacls 不可用或执行失败时返回 False（调用方记录告警），不阻断主流程。
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if os.name != "nt":
+        return True                      # POSIX：chmod 已构成权限边界
+    user = (os.environ.get("USERNAME") or os.environ.get("USER") or "").strip()
+    if not user:
+        return False
+    try:
+        r = subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+                           capture_output=True, timeout=15)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _atomic_write(path: str, data: bytes):
     d = os.path.dirname(path)
     if d:
@@ -74,10 +117,9 @@ def _atomic_write(path: str, data: bytes):
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass  # Windows 下 0600 语义受限，尽力而为
+    if not _harden_permissions(path):
+        log.warning("无法把 %s 的访问权限收敛到当前用户（Windows 下应装/可用 icacls）。"
+                    "该文件目前依赖所在目录的 ACL 保护。", path)
 
 
 def _write_initial_pwd_file(path: str, password: str):
@@ -271,12 +313,17 @@ class AuthStore:
         """env 模式：口令只来自环境变量，**不读也不写**任何口令文件。
 
         这样"改环境变量却不生效"这类困惑在结构上不可能发生——环境变量就是唯一真相。
+
+        口令缺失时**拒绝启动**（AuthConfigError）：既不静默回退 persistent，
+        也不生成"随重启变化、只打印一次"的随机口令——那两种做法都会让运维无从下手。
         """
         if not env_password():
-            log.error("ENERGY_AUTH_MODE=env 但 ADMIN_INITIAL_PASSWORD 为空——"
-                      "将无法登录。请设置该环境变量后重启（或改回 ENERGY_AUTH_MODE=persistent）。")
-        else:
-            log.info("认证模式：env（口令由 ADMIN_INITIAL_PASSWORD 管理，不落盘）")
+            raise AuthConfigError(
+                "ENERGY_AUTH_MODE=env 但环境变量 ADMIN_INITIAL_PASSWORD 为空，无法确定管理员口令，"
+                "服务拒绝启动。\n"
+                "  改法一：设置 ADMIN_INITIAL_PASSWORD=<你的口令> 后重启；\n"
+                "  改法二：去掉 ENERGY_AUTH_MODE（回到默认 persistent，口令落盘到配置目录）。")
+        log.info("认证模式: env ｜ 口令来源: ADMIN_INITIAL_PASSWORD（每次启动都生效，不落盘）")
         # salt/hash 留空：verify() 在 env 模式下不走哈希比对分支
         return {"username": "admin", "salt": "", "hash": "", "must_change": False}
 
@@ -290,25 +337,58 @@ class AuthStore:
         """首启随机口令的一次性落盘路径（persistent 模式才有意义）。"""
         return os.path.join(_config_dir(), INITIAL_PWD_FILENAME)
 
+    def auth_source_description(self) -> str:
+        """一行说明"当前口令从哪来"，在口令**已就绪**的状态下打印。
+
+        仅对非法 ENERGY_AUTH_MODE 告警是不够的——容器日志一刷就过去了，
+        用户仍然会困惑"我改了环境变量为什么不生效"。把结论直接打进启动横幅。
+
+        注意：persistent 模式"首次创建"的文案由 `_create_default()` 自行打印。
+        本方法构造完成后调用时文件必然已存在，因此不在此处放"首次创建"分支——
+        否则会写出一段永远走不到的代码。
+        """
+        if self.mode == "env":
+            return ("认证模式: env ｜ 口令来源: ADMIN_INITIAL_PASSWORD"
+                    "（每次启动都生效，不落盘）")
+        note = "；当前它**不会生效**" if env_password() else ""
+        return (f"认证模式: persistent ｜ 口令来源: 口令文件 {self.path}"
+                f"（环境变量只在首次创建且无此文件时生效{note}）")
+
     def _load(self) -> dict:
+        """读取已有口令文件；无文件则首次创建。
+
+        注意 try 块只包住"读文件+解析"：后续的清理与日志若被 broad except 吞掉，
+        会静默走到 _create_default() 重新造一份凭据，那是最危险的失败模式。
+        """
+        state = None
         if os.path.exists(self.path):
             try:
                 with open(self.path, "r", encoding="utf-8") as f:
                     d = json.load(f)
                 if d.get("hash"):
-                    # 口令文件已存在 → 不走 _create_default()，ADMIN_INITIAL_PASSWORD **不生效**。
-                    # 这正是"跑完 pytest 再启动服务后任何口令都登录失败"的现场：
-                    # 残留的 auth.json 若是测试生成的随机口令，用户设的初始口令会被静默忽略，
-                    # 且从报错信息里完全看不出来。此处显式告警，给出可执行的恢复动作。
-                    if os.getenv("ADMIN_INITIAL_PASSWORD", "").strip():
-                        log.warning(
-                            "⚠️  检测到已存在的口令文件 %s —— ADMIN_INITIAL_PASSWORD 本次"
-                            "**不会生效**（初始口令仅在首次创建时读取）。若这不是你设置的口令，"
-                            "请停止服务、删除该文件后重新启动。", self.path)
-                    return d
+                    state = d
             except Exception:
-                pass
-        return self._create_default()
+                state = None
+
+        if state is None:
+            return self._create_default()
+
+        # 口令文件已存在 → 不走 _create_default()，ADMIN_INITIAL_PASSWORD **不生效**。
+        # 这正是"跑完 pytest 再启动服务后任何口令都登录失败"的现场：残留的 auth.json
+        # 若是测试生成的随机口令，用户设的初始口令会被静默忽略，且从报错里完全看不出来。
+        if env_password():
+            log.warning(
+                "⚠️  检测到已存在的口令文件 %s —— ADMIN_INITIAL_PASSWORD 本次"
+                "**不会生效**（初始口令仅在首次创建时读取）。若这不是你设置的口令，"
+                "请执行 python -m backend.manage reset-password，或改用 ENERGY_AUTH_MODE=env。",
+                self.path)
+        # must_change=False 表示初始口令已失效：此时若还残留一次性口令文件，
+        # 就是一份"长期可读的初始口令"。崩溃中断、手工改密、从别处拷来 auth.json
+        # 都可能留下它，因此在每次启动时按状态纠正。
+        if not state.get("must_change"):
+            self._remove_initial_pwd_file()
+        log.info(self.auth_source_description())
+        return state
 
     def _create_default(self) -> dict:
         """🔴#3 修复：首启生成随机强口令（或读 ADMIN_INITIAL_PASSWORD），不再使用 admin/admin123。
@@ -328,6 +408,9 @@ class AuthStore:
         # 首启生成的 auth.json 权限不受限，与后续 _save() 的 0600 不一致）
         _atomic_write(self.path, json.dumps(d, ensure_ascii=False, indent=2).encode())
         log.info("=" * 60)
+        log.info("认证模式: persistent ｜ 口令来源: %s",
+                 "首次创建，取 ADMIN_INITIAL_PASSWORD" if env_pwd
+                 else f"首次创建，已生成随机口令并写入 {self.initial_pwd_file}")
         if env_pwd:
             log.warning("⚠️  已使用环境变量 ADMIN_INITIAL_PASSWORD 初始化管理员口令，"
                         "首次登录后请立即修改")

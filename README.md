@@ -233,12 +233,19 @@ python backend/server.py
 | 模式 | 设 `ENERGY_AUTH_MODE` | 口令来源 | 适合场景 |
 |------|----------------------|---------|---------|
 | **persistent**（默认） | 留空 | 首启：`ADMIN_INITIAL_PASSWORD` → 无则生成随机口令；此后以 `config/auth.json` 为准 | 本机长期使用、单机部署 |
-| **env** | `env` | **始终**取 `ADMIN_INITIAL_PASSWORD`，不落盘 | 容器 / CI / 演示环境（改环境变量即生效，重装不用清文件） |
+| **env** | `env` | **始终**取 `ADMIN_INITIAL_PASSWORD`，不落盘；**未设置该变量则拒绝启动**（退出码 2） | 容器 / CI / 演示环境（改环境变量即生效，重装不用清文件） |
+
+启动时会打印一行结论，直接回答"我的口令从哪来"：
+
+```
+认证模式: persistent ｜ 口令来源: 口令文件 .../config/auth.json（环境变量只在首次创建且无此文件时生效；当前它**不会生效**）
+认证模式: env ｜ 口令来源: ADMIN_INITIAL_PASSWORD（每次启动都生效，不落盘）
+```
 
 **persistent 模式（默认）**：
 
 1. 启动前设 `ADMIN_INITIAL_PASSWORD` → 用它初始化，首登无需改密；
-2. 不设 → 首启生成随机强口令，**同时**打印到控制台并写入 `config/INITIAL_PASSWORD.txt`（0600 的一次性副本）。首登会强制改密，改密成功后该文件自动删除。
+2. 不设 → 首启生成随机强口令，**同时**打印到控制台并写入 `config/INITIAL_PASSWORD.txt`（一次性副本）。首登会强制改密，改密成功后该文件自动删除；若因崩溃等原因残留，下次启动检测到 `must_change=false` 时会自动清理。
 
 **忘记口令**（不必手工找文件删除）：
 
@@ -252,6 +259,18 @@ python -m backend.manage reset-password --password '你的新口令'
 > （应用内改密同样返回 400 并说明原因），不会出现"改了却不生效"的静默行为。
 
 **安全设计**：口令以 PBKDF2-HMAC-SHA256（200k 迭代）加盐哈希落盘；JWT 为 HS256、默认 12 小时过期，并绑定 User-Agent 指纹（**换浏览器或用 curl 复用浏览器 token 会 401 并提示"登录环境已变化"**——这是刻意设计，不是故障）；登录接口按 IP+账号限流，连续失败指数退避。未登录访问受保护端点返回 401。
+
+**凭据文件权限**（写盘统一走原子写 + 权限收敛）：
+
+| 平台 | 做法 | 是否构成权限边界 |
+|------|------|-----------------|
+| POSIX | `chmod 0600` | ✅ 是 |
+| Windows | `os.chmod` 只能切换只读位（实测写完 `0o600` 后 `stat` 仍是 `0o666`），故额外调用 `icacls <file> /inheritance:r /grant:r "<当前用户>:F"` 显式收紧 ACL | ✅ 是（实测 ACL 仅剩「当前用户 / SYSTEM / Administrators」，普通用户组已被移除）。`icacls` 不可用时记录告警，退回"依赖所在目录 ACL" |
+
+> ⚠️ 因此**不要**把 `0600` 说成跨平台安全边界：在 Windows 上真正起作用的是上面的 ACL。
+> 另需注意，`ENERGY_AUTH_MODE=env` 不落盘的是**口令**；JWT 签名密钥 `config/.auth_secret`
+> 与 API Key 加密密钥 `config/.api_secret` 仍会生成——否则每次重启 token 全部失效、
+> 已保存的 API Key 无法解密。
 
 登录后进入看板，点击**「开始求解」**触发完整调度流程（含 MILP 求解，本机实测 **26 ~ 43 秒**，随当日规模与机器性能变化；结果会落盘缓存，再次访问秒开）。
 
@@ -336,7 +355,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `ENERGY_PORT` | `8800` | 服务端口 |
 | `ENERGY_LOG_LEVEL` | `info` | uvicorn 日志级别 |
 | `ADMIN_INITIAL_PASSWORD` | 空 | 管理员口令。**persistent 模式**下仅用于首次创建；**env 模式**下每次启动都生效 |
-| `ENERGY_AUTH_MODE` | `persistent` | 认证模式：`persistent`（口令哈希落盘）/ `env`（口令仅来自环境变量，不落盘）。非法值回退 `persistent` |
+| `ENERGY_AUTH_MODE` | `persistent` | 认证模式：`persistent`（口令哈希落盘）/ `env`（口令仅来自环境变量，不落盘）。非法值回退 `persistent`；`env` 下未设 `ADMIN_INITIAL_PASSWORD` 会**拒绝启动**（退出码 2） |
 | `ENERGY_CACHE_SECRET_FILE` | `config/.cache_secret` | 缓存 HMAC 签名密钥路径 |
 | `ENERGY_CONFIG_DIR` | `config/` | **认证与密钥落盘目录**（`auth.json` / `.auth_secret` / `.api_secret`）。测试与只读部署用它把可变状态移出代码目录；pytest 会自动指向临时目录 |
 | `LLM_TEST_ALLOW_HOSTS` | 空 | SSRF 白名单逃生口，仅自建 LLM 网关时需要 |
@@ -542,7 +561,9 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **102 项**（快测 79 项 + `slow` 23 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+测试规模 **111 项**（快测 88 项 + `slow` 23 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、全量走 nightly 与手动触发。
+
+**发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。
 
 > 若 `tests/test_server_api.py` 在某个受限环境里首个用例就失败并报
 > `PermissionError: [WinError 10013]`：那是 `TestClient` 依赖 loopback `socketpair()` 被沙箱拦截，

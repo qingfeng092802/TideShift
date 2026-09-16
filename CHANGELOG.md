@@ -205,6 +205,53 @@ P0/P1 无项；其中 P3 项 F2 已在本轮修复：
 > 多用户对"储能调度算法"这个核心价值贡献有限却会引入用户表、权限与重置流程；
 > OIDC 需要外部回调配置，会破坏"完全离线可跑"。这些属产品定位选择，非技术限制。
 
+### 修复（Fixed）· 评审闸门闭环（Windows 权限 / env 语义 / 启动横幅 / 硬测试 / CI）
+
+评审结论为"架构不用返工"，但列出 5 条发版前的硬闸门。逐条落地：
+
+1. **Windows 权限不再是"0600 说说而已"**
+   此前 `_atomic_write` 只做 `os.chmod(0o600)`——而 **`os.chmod` 在 Windows 上只能切换只读位**，
+   实测写完 `0o600` 后 `stat` 仍是 `0o666`，即"0600 的一次性口令文件"在 Windows 上不成立。
+   新增 `_harden_permissions()`：POSIX 走 `chmod 0600`；Windows 额外执行
+   `icacls <file> /inheritance:r /grant:r "<当前用户>:F"` 切断继承并只授当前用户
+   （授权用 `F` 而非 `R`，否则后续 `_atomic_write` 的 `os.replace` 会因无权删除目标而失败）。
+   `icacls` 不可用时记录告警并退回"依赖目录 ACL"，不再把 0600 当跨平台安全边界。
+   实测 ACL 仅剩「当前用户 / `NT AUTHORITY\SYSTEM` / `BUILTIN\Administrators`」，普通用户组已移除。
+
+2. **`env` 模式未设 `ADMIN_INITIAL_PASSWORD` 的语义定死为「拒绝启动」**
+   新增 `AuthConfigError`：该情形下**不**静默回退 `persistent`（会让用户以为 env 生效、实际写盘），
+   也**不**生成随机口令（口令会随重启变化且只打印一次，无法运维），而是
+   **服务拒绝启动 + 退出码 2 + 打印可执行的改法**（设 `ADMIN_INITIAL_PASSWORD`，或去掉 `ENERGY_AUTH_MODE`）。
+   配置错误在启动时暴露，而不是等到用户打开登录页。
+
+3. **启动横幅打印「认证模式 + 口令来源」**
+   仅对非法取值告警不够——容器日志一刷就过去。现在启动即打印一行结论，
+   例如 `认证模式: persistent ｜ 口令来源: 口令文件 …/config/auth.json（环境变量只在首次创建且无此文件时生效；当前它**不会生效**）`
+   ——把"我改了环境变量为什么不生效"的答案直接摆在日志里。四种状态（persistent 首次创建有无环境变量 /
+   已有文件 / env）文案均已实测。
+
+4. **补两条硬测试（评审指定）**
+   - `test_env_mode_login_creates_no_auth_file`：**HTTP 层**走完登录与受保护端点后，配置目录下
+     不得新增 `auth.json` 与一次性口令文件（只测 AuthStore 不够，登录端点/中间件都可能间接落盘）；
+   - `test_stale_initial_password_file_cleaned_when_must_change_false`：`must_change=false` 时启动
+     自动清理残留的一次性口令文件（崩溃中断、手工改密、替换 `auth.json` 都可能把它留下，
+     那等于磁盘上长期躺着一份可读的初始口令）；并配一条反向约束
+     `test_initial_password_file_kept_while_must_change_true`，避免误删导致用户还没登录就丢了唯一口令来源。
+   实现上把 `_load()` 的 `try` 收窄到只包"读文件+解析"：后续清理与日志若被 broad except 吞掉，
+   会静默走到 `_create_default()` 重新造一份凭据——那是最危险的失败模式。
+
+5. **CI 补上标准 pytest 的按需全量入口**
+   全量原先只在 nightly 定时跑，本机又因受限沙箱跑不了 pytest，导致"标准入口全绿"没有可复现出口。
+   `.github/workflows/ci.yml` 增加 `workflow_dispatch`，`full-tests` 作业改为
+   `schedule || workflow_dispatch` 触发（PR/push 仍跑快测），可在 Actions 页面一键跑全量（含 `slow`）。
+   README 明确写：**发版门槛 = CI 全量 `pytest`**，替代验证不能代替标准入口。
+
+> **升级兼容性（重要，需写入 PR 描述）**
+> 已有 `config/auth.json` 的用户升级后**默认仍是 `persistent`**：设置 `ADMIN_INITIAL_PASSWORD`
+> **不会生效**（该变量只在首次创建口令文件时读取）。这是刻意行为——否则你在界面上改过的口令
+> 会在下次重启时被环境变量覆盖回去。想改用 `env` 语义必须**显式**设置 `ENERGY_AUTH_MODE=env`。
+> 启动横幅已把这一点直接打出来，无需翻阅文档即可自查。
+
 ### 验证（Verified）
 
 - `pytest` 快测 **79 项通过**、全量（含 slow）**102 项通过**（Python 3.13.14 + `requirements.lock`；

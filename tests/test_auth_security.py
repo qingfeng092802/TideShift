@@ -151,6 +151,45 @@ def test_authstore_auto_create_false_does_not_mint_password(tmp_path, monkeypatc
     assert st.verify("admin", "Explicit-Set-1234") is True
 
 
+def test_stale_initial_password_file_cleaned_when_must_change_false(tmp_path, monkeypatch):
+    """must_change=false 时启动应清掉残留的一次性口令文件。
+
+    一次性口令文件只在"初始口令仍然有效"期间才该存在。崩溃中断、手工改密、
+    或直接替换 `auth.json` 都可能把它留下——那就等于磁盘上长期躺着一份可读的初始口令。
+    因此每次启动都按 must_change 状态纠正。
+    """
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "persistent")
+    monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
+
+    auth_mod.AuthStore()                       # 首启：生成随机口令 + 一次性文件
+    f = tmp_path / auth_mod.INITIAL_PWD_FILENAME
+    assert f.exists(), "前置条件：首启应写出一次性口令文件"
+
+    # 模拟"手工改密 / 直接替换 auth.json"：文件里 must_change 已为 false，但密码文件残留
+    d = json.loads((tmp_path / "auth.json").read_text(encoding="utf-8"))
+    d["must_change"] = False
+    (tmp_path / "auth.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    assert f.exists(), "前置条件：残留文件仍在"
+
+    auth_mod.AuthStore()                       # 再次启动
+    assert not f.exists(), "must_change=false 时启动应清理残留的一次性口令文件"
+
+
+def test_initial_password_file_kept_while_must_change_true(tmp_path, monkeypatch):
+    """反向约束：must_change=true 期间不得误删——否则用户还没登录就丢了唯一口令来源。"""
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "persistent")
+    monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
+
+    auth_mod.AuthStore()
+    f = tmp_path / auth_mod.INITIAL_PWD_FILENAME
+    assert f.exists()
+
+    auth_mod.AuthStore()                       # 重启（此时尚未改密）
+    assert f.exists(), "must_change=true 期间一次性口令文件必须保留"
+
+
 def test_jwt_expired_rejected():
     token = auth_mod.jwt_encode({"sub": "tester"}, ttl_s=-1)
     assert auth_mod.jwt_verify(token) is None

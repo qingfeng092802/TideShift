@@ -11,10 +11,14 @@ on:
   pull_request:
   schedule:
     - cron: "0 18 * * *"   # 每日 UTC 18:00（北京 02:00）全量
+  # 手动触发：**发布前的全量回归**（含 slow）由这个入口跑。
+  # 加它的原因：全量原先只在 nightly 定时跑，本机又因受限沙箱跑不了 pytest，
+  # 于是"标准入口全绿"没有可复现的出口。现在可在 Actions 页面一键跑全量。
+  workflow_dispatch:
 
 jobs:
   fast-tests:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +29,9 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: pytest            # pytest.ini 默认 -m "not slow"
 
-  full-tests-nightly:
-    if: github.event_name == 'schedule'
+  full-tests:
+    # 定时（nightly）与手动触发时跑全量（含 slow），作为发版前的标准回归入口
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

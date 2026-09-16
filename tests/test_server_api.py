@@ -148,3 +148,48 @@ def test_chat_response_exposes_mode(client, monkeypatch):
     assert "reply" in body and "history" in body
     # 无 API Key 时工厂必定返回规则模式 Agent
     assert body.get("mode") in ("rule", "llm"), body
+
+
+def test_env_mode_login_creates_no_auth_file(client, tmp_path, monkeypatch):
+    """ENERGY_AUTH_MODE=env：走完真实登录与受保护端点后，配置目录下不得新增 auth.json。
+
+    只在 AuthStore 单测层面断言不够——登录端点、JWT 签发、中间件都可能间接落盘，
+    必须在 HTTP 层确认"env 模式不写口令文件"。
+
+    说明：env 模式不落盘的是**口令**；JWT 签名密钥 `config/.auth_secret` 与 API Key
+    加密密钥 `config/.api_secret` 仍会生成（否则每次重启 token 全失效、已存 Key 无法解密），
+    因此本用例只断言口令相关文件不存在。
+    """
+    auth_mod = server.auth_mod
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "env")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "env-login-pass-1")
+    # 用 env 模式下的新实例替换模块级 AUTH（其模式在构造时确定）
+    monkeypatch.setattr(server, "AUTH", auth_mod.AuthStore())
+
+    r = client.post("/api/auth/login", json={"username": "admin",
+                                            "password": "env-login-pass-1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["must_change"] is False
+    tok = r.json()["token"]
+    r2 = client.get("/api/bootstrap", headers={"Authorization": f"Bearer {tok}"})
+    assert r2.status_code == 200, r2.text
+
+    assert not (tmp_path / "auth.json").exists(), "env 模式不应生成口令文件"
+    assert not (tmp_path / auth_mod.INITIAL_PWD_FILENAME).exists(), \
+        "env 模式不应生成一次性口令文件"
+
+
+def test_env_mode_without_password_refuses_to_start(tmp_path, monkeypatch):
+    """env 模式但未提供口令：必须**拒绝启动**，不得静默回退 persistent、
+    也不得每次启动生成随机口令（后者会让口令随重启变化且只打印一次）。"""
+    auth_mod = server.auth_mod
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "env")
+    monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
+
+    with pytest.raises(auth_mod.AuthConfigError) as ei:
+        auth_mod.AuthStore()
+    msg = str(ei.value)
+    assert "ADMIN_INITIAL_PASSWORD" in msg and "拒绝启动" in msg
+    assert not (tmp_path / "auth.json").exists(), "拒绝启动不得留下任何口令文件"
