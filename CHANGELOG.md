@@ -3,6 +3,52 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（SemVer）。
 唯一版本号来源：`src/__init__.py` 的 `__version__`。
 
+## [未发布] - 开源发布准备
+
+面向公开仓库重写核心文档与依赖配置，**不涉及任何运行时代码改动**。
+
+### 变更（Changed）
+
+- **`README.md` 重写**：改为面向外部开发者的结构——项目简介 / 核心功能 / 系统架构（Mermaid）/
+  环境依赖 / 安装 / 快速开始与首启登录 / 使用说明（页面、数据上传、LLM 配置、API 一览）/
+  配置项 / 项目结构 / 核心技术细节 / 量化成果 / 测试 / 常见问题 / 贡献指南 / 路线图 / 许可证。
+  移除面向个人求职的表述；**保留全部实测数据表及其口径脚注**（含"未复核"标注）。
+
+- **`requirements.txt` 约束收口**：由 `~=` 兼容发布区间改为 `>=下界,<上界` 显式区间
+  （下界 = 实测版本，上界 = 下一个可能破坏兼容的版本）。原因：`langchain~=1.3` 等价于
+  `>=1.3,<2.0`，实测全新安装会解析到 langchain 1.4.0 / langchain-core 1.6.3 /
+  langchain-openai 1.6.2 等**未经验证的版本**。收口后重新实测：直接依赖不再跨次版本跳变
+  （langchain 1.3.x、langgraph 1.2.x、langchain-core 1.5.x），唯一例外是 uvicorn
+  （0.52.1 → 0.53.0，Web 栈按主版本收口）。
+  另补声明 `langchain-core`——它被 `src/agents/chat_agent.py` 直接 import。
+
+- **`requirements.lock` 说明修正**：明确其锁定范围为**直接依赖**（21 项），不含传递依赖；
+  原注释"由验证环境 pip freeze 生成"易被误读为全量冻结。
+
+- **`requirements-dev.txt`**：改为与 `requirements.txt` 同口径的显式区间。
+
+- **`.gitignore` 扩充**：补齐构建产物、静态检查缓存、编辑器与系统文件、备份文件；
+  密钥与运行时状态（`config/`、`.solve_cache/`、`.env`、`logs/`）的排除口径保持一致。
+
+- **`.env.example`**：补用法说明头部。
+
+- **`LICENSE`**：MIT，版权署名 qingfeng092802 (qingfeng092802)。
+
+### 验证（Verified）
+
+- `pytest` 快测 **70 项通过**（Python 3.13.14 + `requirements.lock` 对应版本）。
+- `git add -A` 后纳入版本控制 **67 个文件**；`config/`、`.env`、`logs/`、`.solve_cache/`
+  经 `git check-ignore` 确认均被正确排除。
+- 后端启动冒烟：`/api/system-info` 返回版本 `2.4.4-fix30`；未带 token 访问
+  `/api/page/dashboard` 返回 401（认证门生效）；首启经 `ADMIN_INITIAL_PASSWORD` 登录返回 200。
+- `pip install --dry-run -r requirements.txt` 解析通过，未出现依赖冲突。
+
+### 说明（Notes）
+
+- 源码注释、测试与前端脚本中的内部审查编号（`🔴` / `🟠#24` / `P0-02` 等）**本次未清理**：
+  它们对应一份未随仓库分发的内部审查报告，且该约定贯穿 44 个文件。此项属独立的注释清理
+  工作，与文档/配置重写不同层，不影响功能与运行。
+
 ## [2.4.4-fix30] - 2026-09-14（交付审查问题闭环）
 
 ### 修复（Fixed）
