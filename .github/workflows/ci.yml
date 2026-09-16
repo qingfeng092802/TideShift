@@ -1,0 +1,39 @@
+# 🟠#24：CI——单元/集成测试（PR 触发，跳过 slow）；nightly 全量 + 覆盖率
+# fix30：python-version 由 3.11 改为 3.13 —— 与 requirements.lock 的生成环境
+#   （Python 3.13.x）和 .python-version 统一。此前三者口径不一致：
+#   声明 3.11 / lock 在 3.13 上生成 / 实测环境为 3.13。
+#   注：3.11 下的兼容性本次未验证，如需支持 3.11 请先跑通本 CI。
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 18 * * *"   # 每日 UTC 18:00（北京 02:00）全量
+
+jobs:
+  fast-tests:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest            # pytest.ini 默认 -m "not slow"
+
+  full-tests-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -m "" -q            # 全量（含 slow）
+      - run: coverage run -m pytest -m "" -q && coverage report

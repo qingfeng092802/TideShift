@@ -1,0 +1,82 @@
+# ==============================================================================
+# 汐储 TideShift · .gitignore
+# 原则：只忽略「可再生 / 本机私有 / 密钥」三类内容，业务代码与演示数据一律入库。
+# ==============================================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+pip-wheel-metadata/
+
+# ---------- 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+.python-version-local
+
+# ---------- 测试与静态检查缓存 ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit*.xml
+report.xml
+
+# ---------- 密钥与运行时状态（P0：绝不入库、绝不随交付物分发）----------
+# config/ 内含 auth.json（口令哈希）、.auth_secret（JWT 签名密钥）、
+# .api_secret（Fernet 加密密钥）、llm_providers.json（加密后的 API Key）
+config/
+# 求解磁盘缓存（含缓存体与 HMAC 签名密钥文件）
+.solve_cache/
+*.pkl
+*.tmp
+
+# ---------- 环境变量（含 API Key）----------
+.env
+.env.*
+!.env.example
+
+# ---------- 运行日志 ----------
+logs/
+*.log
+
+# ---------- 编辑器 / IDE ----------
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------- 备份 / 临时 / 草稿产物 ----------
+# 开发期备份（如 xxx.py.bak_20260911_181900）与临时脚本不应混入仓库
+*.bak
+*.bak_*
+*.backup
+*.orig
+*.rej
+scratch/
+_tmp/
+_temp/

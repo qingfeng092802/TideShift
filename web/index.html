@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>汐储 TideShift · 工商业储能多智能体调度平台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='9' fill='%230F6E56'/%3E%3Cpath d='M6 22c3-6 5-6 8 0s5 6 8 0 5-6 8 0' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' fill='none'/%3E%3Cpath d='M20 6 13 15h4.5L16 21l7-9h-4.5L20 6z' fill='%23FFE9A8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css?v=fix30">
+<!-- P1-6：本地 vendor，内网/离线可用；defer：不再阻塞首屏解析（charts.js 只定义函数，真正 init 在 DOMContentLoaded 之后） -->
+<!-- P1-B4：本地 vendor 文件加 SRI 完整性校验——文件被篡改/损坏时浏览器拒绝执行，供应链攻击可感知 -->
+<script src="vendor/echarts.min.js" defer integrity="sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR"></script>
+</head>
+<body>
+<a href="#content" class="skip-link">跳到主内容</a>
+<div class="app" id="app">
+
+  <!-- ================= 左栏 · 导航 ================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-logo">
+        <svg viewBox="0 0 36 36" width="24" height="24" fill="none">
+          <path d="M6 22c3-6 5-6 8 0s5 6 8 0 5-6 8 0" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M20 6 13 15h4.5L16 21l7-9h-4.5L20 6z" fill="#FFE9A8"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">汐储 TideShift</div>
+        <!-- P0-F1：版本号从 /api/bootstrap 动态渲染（app.js boot），单一事实来源，消除发版漂移 -->
+        <div class="brand-sub" id="brand-sub">多智能体调度 · LLM 解释层</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav"></nav>
+
+    <div class="sb-section">
+      <button class="sb-btn" id="btn-upload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg>
+        数据上传 / 管理
+      </button>
+      <div class="sb-caption" id="sb-data-caption">使用内置演示数据 · 上传后自动切换</div>
+    </div>
+
+    <div class="sb-section" style="margin-top:auto;">
+      <div style="font-size:12.5px;font-weight:700;padding:0 2px 2px;">🤖 对话Agent</div>
+      <div class="agent-card" id="agent-card">
+        <div class="agent-row"><span class="k">当前模型</span><span class="v" id="ag-name">—</span></div>
+        <div class="agent-row"><span class="k">模型名</span><span class="v num" id="ag-model">—</span></div>
+        <div style="margin-top:6px;text-align:right;" id="ag-key"></div>
+      </div>
+      <div class="sb-hint">在「设置 → 模型设置」中添加供应商、配置 Key 与模型列表</div>
+    </div>
+  </aside>
+
+  <!-- ================= 中栏 · 主区 ================= -->
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="btn-sidebar" title="收起/展开侧边栏" aria-label="收起或展开侧边栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+      </button>
+      <div class="crumb">数据可视化 / <b id="crumb-page">数据总览</b></div>
+      <div class="topbar-right">
+        <span class="run-status"><span class="status-dot"></span>运行中</span>
+        <button class="icon-btn" id="btn-chat" title="调度助手" aria-label="打开调度助手">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 7V4M8 4h8"/><circle cx="9" cy="13" r="1" fill="var(--accent)"/><circle cx="15" cy="13" r="1" fill="var(--accent)"/><path d="M9.5 16.5h5"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-theme" title="切换浅色/深色模式" aria-label="切换浅色/深色模式"></button>
+      </div>
+    </header>
+
+    <div class="content" id="content" tabindex="-1">
+      <!-- 冷启动 / 求解进度 -->
+      <div class="solve-veil" id="solve-veil" style="display:none;">
+        <div class="solve-card">
+          <div class="solve-head">
+            <div class="solve-title"><span class="spinner"></span><span id="solve-title">🤖 多智能体系统运行中…</span></div>
+            <div class="solve-timer num" id="solve-timer">⏱ 00:00</div>
+          </div>
+          <div class="solve-label" id="solve-label">准备调度引擎…</div>
+          <div class="progress-track"><div class="progress-fill" id="solve-fill"></div></div>
+          <div class="solve-cols">
+            <div class="panel-card tl-card">
+              <div class="panel-title">🧭 求解时间线</div>
+              <div class="tl" id="solve-stages" aria-live="polite"></div>
+            </div>
+            <div class="tl-side">
+              <div class="panel-card">
+                <div class="panel-title">📊 当前步骤详情</div>
+                <div id="solve-detail" class="caption" style="margin:0;">初始化中…</div>
+              </div>
+              <div class="panel-card" style="margin-top:14px;">
+                <div class="panel-title">📝 实时日志</div>
+                <div class="logbox" id="solve-log"></div>
+              </div>
+            </div>
+          </div>
+          <div class="solve-status" id="solve-status"></div>
+        </div>
+      </div>
+
+      <div id="pages-root" style="display:none;">
+        <section class="page" id="page-dashboard"></section>
+        <section class="page" id="page-scheduling" style="display:none;"></section>
+        <section class="page" id="page-forecast" style="display:none;"></section>
+        <section class="page" id="page-thermal" style="display:none;"></section>
+        <section class="page" id="page-dr" style="display:none;"></section>
+        <section class="page" id="page-settings" style="display:none;"></section>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= 右栏 · 对话面板 ================= -->
+  <aside class="chatpanel" id="chatpanel">
+    <div class="chat-head">
+      <span>🤖 调度助手</span>
+      <div style="display:flex;gap:6px;">
+        <button class="icon-btn" id="btn-chat-clear" title="清空对话" aria-label="清空对话" style="width:26px;height:26px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-chat-close" title="收起对话栏" aria-label="收起对话栏" style="width:26px;height:26px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="13"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite"></div>
+    <form class="chat-form" id="chat-form">
+      <input id="chat-input" placeholder="输入你的问题，Enter 发送…" autocomplete="off">
+      <button class="btn btn-primary btn-sm" type="submit" id="chat-send">🚀 发送</button>
+    </form>
+  </aside>
+</div>
+
+<!-- ================= 上传弹窗 ================= -->
+<dialog id="upload-dlg">
+  <div class="dlg-head">
+    <span>📁 上传负荷数据</span>
+    <button class="icon-btn" id="btn-upload-close" aria-label="关闭上传弹窗" style="width:26px;height:26px;">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="upload-label">自动识别以下三种 CSV 格式</div>
+    <div class="fmt-grid">
+      <div class="fmt-item">
+        <span class="fmt-no" aria-hidden="true">1</span>
+        <b>NREL ComStock</b>
+        <span>建筑类型与电耗明细，含表头即可</span>
+      </div>
+      <div class="fmt-item">
+        <span class="fmt-no" aria-hidden="true">2</span>
+        <b>中国工业负荷</b>
+        <span>需含 <code>timestamp</code> 与 <code>consumption</code></span>
+      </div>
+      <div class="fmt-item">
+        <span class="fmt-no" aria-hidden="true">3</span>
+        <b>标准格式</b>
+        <span>需含 <code>timestamp</code> <code>load_kw</code> <code>price</code> <code>temp</code></span>
+      </div>
+    </div>
+
+    <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="点击选择或拖拽 CSV 文件到此处上传">
+      <div class="dz-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="24" height="24">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v12"/>
+        </svg>
+      </div>
+      <div class="dz-title">拖拽 CSV 文件到此处</div>
+      <div class="dz-sub">支持 .csv · 单文件 ≤ 50 MB · 至少 96 条 · 时间戳升序</div>
+      <span class="btn btn-primary dz-cta" aria-hidden="true">选择文件</span>
+      <input type="file" id="file-input" accept=".csv" class="visually-hidden" tabindex="-1" aria-hidden="true">
+    </div>
+
+    <div id="upload-result" class="upload-msg" role="status"></div>
+
+    <div class="upload-foot">
+      <button type="button" class="btn btn-sm" id="btn-upload-template">⬇ 下载标准格式模板</button>
+      <div id="upload-loaded" style="display:none;">
+        <button class="btn btn-sm btn-danger-ghost" id="btn-upload-clear">🗑️ 清除当前数据</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<!-- ================= 欢迎页 ================= -->
+<div id="welcome" style="display:none;">
+  <div class="wl-inner">
+    <div class="wl-logo">
+      <svg viewBox="0 0 36 36" width="30" height="30" fill="none">
+        <path d="M6 22c3-6 5-6 8 0s5 6 8 0 5-6 8 0" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M20 6 13 15h4.5L16 21l7-9h-4.5L20 6z" fill="#FFE9A8"/>
+      </svg>
+    </div>
+    <div class="wl-name">汐储 <b>TideShift</b></div>
+    <div class="wl-tagline">工商业储能峰谷套利与需求响应 · 多智能体优化平台</div>
+    <div class="wl-pills">
+      <span class="p-green">LangGraph 多智能体编排</span>
+      <span class="p-blue">MILP 优化求解（HiGHS）</span>
+      <span class="p-orange">XGBoost 负荷预测</span>
+      <span class="p-red">一阶RC热安全约束</span>
+      <span class="p-purple">LLM 决策解释</span>
+    </div>
+    <div class="wl-hint">选择一个功能模块直接进入，或点击下方按钮进入系统总览</div>
+    <div class="wl-grid">
+      <button class="wl-card" data-page="dashboard"><i aria-hidden="true">📊</i><b>数据总览</b><span>KPI 总览 · 收益构成 · AI 决策解释</span></button>
+      <button class="wl-card" data-page="scheduling"><i aria-hidden="true">⚡</i><b>充放电调度</b><span>24h 充放电计划 · 峰谷套利 · SOC 跟踪</span></button>
+      <button class="wl-card" data-page="forecast"><i aria-hidden="true">📈</i><b>负荷预测</b><span>XGBoost 预测 · 多日准确率对比</span></button>
+      <button class="wl-card" data-page="thermal"><i aria-hidden="true">🌡️</i><b>电池热管理</b><span>一阶 RC 热模型 · 温度仿真 · 寿命衰减</span></button>
+      <button class="wl-card" data-page="dr"><i aria-hidden="true">📡</i><b>需求响应</b><span>DR 事件触发 · 三重校验 · 净收益核算</span></button>
+      <button class="wl-card" data-page="settings"><i aria-hidden="true">⚙️</i><b>系统设置</b><span>模型供应商 · 电池/电价参数 · 主题切换</span></button>
+    </div>
+    <div class="wl-actions">
+      <button class="wl-btn-primary" id="wl-enter">🚀 进入系统（演示数据）</button>
+      <button class="wl-btn-secondary" id="wl-upload">📁 上传我的数据</button>
+    </div>
+    <div class="wl-note">💡 不上传则使用内置演示数据，可随时在系统设置中更换数据源</div>
+    <div class="wl-foot"><span class="wl-dot"></span>汐储 TideShift <span id="wl-version">v—</span> · LangGraph + MILP + XGBoost · 峰谷套利，向谷而储</div>
+  </div>
+</div>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+
+<script src="js/api.js?v=fix30"></script>
+<script src="js/markdown.js?v=fix30"></script>
+<script src="js/charts.js?v=fix30"></script>
+<script src="js/pages.js?v=fix30"></script>
+<script src="js/app.js?v=fix30"></script>
+</body>
+</html>
