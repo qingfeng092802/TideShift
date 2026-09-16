@@ -162,7 +162,7 @@ function renderDashboard(root, d) {
           }
           return `<tr><td>${esc(r.name)}</td><td class="r">${r.base}</td><td class="r">${r.opt}</td><td class="r">${impHtml}</td></tr>`;
         }).join("")}</tbody></table></div>
-        <div class="info-note" style="margin-top:12px;">📈 <b>年化估算</b>：套利${d.annual.arb}万 + DR${d.annual.dr}万(按年50响应日) - 衰减${d.annual.deg}万 = <b>净收益${d.annual.net}万元/年</b></div>
+        <div class="info-note" style="margin-top:12px;">📈 <b>年化估算</b>：套利${d.annual.arb}万 + DR${d.annual.dr}万(按 50 天/年) - 衰减${d.annual.deg}万 = <b>净收益${d.annual.net}万元/年</b></div>
       </div>
     </div>
 

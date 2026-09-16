@@ -9,10 +9,14 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-102%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
 
 </div>
+
+> **项目定位**：一个面向交流与教学的**参考实现 / 演示系统**（reference implementation），不是可直接投产的调度产品。
+> 内置的收益测算建立在若干简化假设之上（见[已知局限与路线图](#已知局限与路线图)），
+> **不构成**调度决策、财务结算或容量规划的依据。
 
 > ### ⚠️ 公网部署前必读
 >
@@ -180,7 +184,7 @@ Python 依赖分三份管理，职责不要混用：
 
 ```bash
 # 1. 进入项目根目录（克隆或下载本仓库后）
-cd energy-dispatch-proj
+cd TideShift
 
 # 2. 创建虚拟环境（推荐，隔离依赖）
 python -m venv .venv
@@ -365,7 +369,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 ## 项目结构
 
 ```
-energy-dispatch-proj/
+TideShift/
 ├── backend/
 │   ├── server.py                   # FastAPI 后端 + Web 静态服务（含 JWT 认证中间件）
 │   ├── auth.py                     # 安全模块：JWT / Fernet / PBKDF2 口令存储
