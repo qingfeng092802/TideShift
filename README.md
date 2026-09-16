@@ -9,19 +9,29 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-70%20passed%20(fast)-brightgreen)
-
-<!-- TODO: 推到 GitHub 后把下面这行的 <owner>/<repo> 替换为真实仓库地址并取消注释
-[![tests](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
--->
+![Tests](https://img.shields.io/badge/tests-92%20passed-brightgreen)
+![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
 
 </div>
+
+> ### ⚠️ 公网部署前必读
+>
+> 本项目面向**单机 / 内网**场景，默认只监听 `127.0.0.1:8800`。若要暴露到公网，**必须**先完成三件事：
+> **①** 修改管理员口令（设 `ADMIN_INITIAL_PASSWORD` 或首登后立即改密）；**②** 置于 HTTPS 反向代理之后；
+> **③** 限制 `config/` 与 `.solve_cache/` 目录的访问权限。细节见[配置项](#配置项)。
+
+> ### 📊 数据来源声明
+>
+> 仓库内 `data/` 是**合成演示数据**（由 `src/data/data_generator.py` 按确定性日模式 + 3% 噪声生成），
+> **不代表任何真实企业负荷**，不可用于生产结算或容量规划。系统支持上传自有数据自动切换，
+> 见[使用说明](#使用说明) → 数据上传。所有量化结论均标注了复现环境与口径，见[量化成果](#量化成果)。
 
 ---
 
 ## 目录
 
 - [项目简介](#项目简介)
+- [界面预览](#界面预览)
 - [核心功能](#核心功能)
 - [系统架构](#系统架构)
 - [环境依赖](#环境依赖)
@@ -51,6 +61,37 @@
 系统以 Web 看板形式交付（FastAPI + 原生 JS + ECharts，前端资源本地分发、完全离线可用），打开浏览器即可跑通全流程。
 
 > **技术栈关键词**：PuLP / HiGHS、MILP + SOS2 分段线性化、XGBoost、LangGraph、LLM 决策解释层（含防幻觉回查）、FastAPI。
+
+## 界面预览
+
+点开「开始求解」后，系统会自动跑完「负荷预测 → MILP 调度 → 需求响应」全链路（本机实测 26 ~ 43 秒，含 MILP 求解）：
+
+![数据总览](docs/screenshots/02-dashboard-light.png)
+
+<details>
+<summary>展开查看其余界面（充放电调度 / 电池热管理 / 深色主题 / 欢迎页）</summary>
+
+<br/>
+
+**充放电调度** —— 24h 充放电计划、峰谷套利、SOC 跟踪：
+
+![充放电调度](docs/screenshots/03-scheduling.png)
+
+**电池热管理** —— 一阶 RC 热模型温度仿真、降额区间、寿命衰减：
+
+![电池热管理](docs/screenshots/04-thermal.png)
+
+**数据总览（深色主题）**：
+
+![数据总览-深色](docs/screenshots/05-dashboard-dark.png)
+
+**欢迎页** —— 提供「进入系统（演示数据）」与「上传我的数据」两条入口：
+
+![欢迎页](docs/screenshots/01-welcome.png)
+
+</details>
+
+> 以上截图为真实界面（Playwright 驱动真实登录与求解流程生成），非设计稿。
 
 ## 核心功能
 
@@ -120,21 +161,26 @@ Python 依赖分三份管理，职责不要混用：
 | 文件 | 用途 | 安装命令 |
 |------|------|----------|
 | `requirements.txt` | 直接运行依赖，写成 `>=下界,<上界` 区间 | `pip install -r requirements.txt` |
-| `requirements.lock` | 直接依赖**逐版本精确锁定**（不含传递依赖） | `pip install -r requirements.lock` |
+| `requirements.lock` | **完整锁**：76 个包（直接 20 + 传递 56）全部钉到具体版本 | `pip install -r requirements.lock` |
 | `requirements-dev.txt` | 开发/测试依赖（含 `pytest`、`coverage`、`httpx`） | `pip install -r requirements-dev.txt` |
 
-**版本约束约定**：下界 = 实测通过版本，上界 = 下一个预期可能破坏兼容的版本。收口粒度按风险分档——AI 编排栈（`langchain` / `langgraph` 系）收口到次版本，求解器 `highspy` 收口到次版本（版本会影响求解耗时与数值），科学计算 / 机器学习 / Web 栈收口到主版本。
+**两个依赖文件的区别（重要）**
+
+- `requirements.txt` 是**区间约束**：下界 = 实测通过版本，上界 = 下一个预期可能破坏兼容的版本。装出来的版本可能比实测新一个补丁号（例如 `langchain 1.3.14 → 1.3.15`），但**不会跨次版本跳变**。
+- `requirements.lock` 是**完整锁**：直接依赖与全部传递依赖共 **76 个包**都钉到具体版本，装出来的依赖树与实测环境**逐版本一致**。**CI 与生产环境请用这一份。**
+- 锁文件**不含 hash**：本项目跨平台（Windows / Linux / macOS），而 pip 的 hash 校验要求按平台分别记录每个 wheel 的 hash，会破坏跨平台可用性。需要 hash 级校验时，请在目标平台用 `pip-compile --generate-hashes` 或 `pip download` + `pip hash` 生成。
+
+**版本约束约定**：收口粒度按风险分档——AI 编排栈（`langchain` / `langgraph` 系）收口到次版本，求解器 `highspy` 收口到次版本（版本会影响求解耗时与数值），科学计算 / 机器学习 / Web 栈收口到主版本。
 
 > **为什么不写成 `~=`**：`langchain~=1.3` 等价于 `>=1.3,<2.0`，允许跨次版本升级。实测发现全新安装会解析到 `langchain 1.4.0`、`langchain-core 1.6.3`、`langchain-openai 1.6.2`、`uvicorn 0.53.0` 等**未经本项目验证**的版本，与 `requirements.lock` 记录的实测环境不在同一条次版本线上。收口后重新实测：直接依赖与实测环境**不再跨次版本跳变**（多数为补丁号差异，如 `langchain 1.3.14 → 1.3.15`、`langchain-core 1.5.3 → 1.5.6`）；唯一例外是 `uvicorn`（`0.52.1 → 0.53.0`，Web 栈按主版本收口）。需要逐版本完全一致请用 `requirements.lock`。
 
-> 维护约定：改动 `requirements.txt` 的下界必须同步 `requirements.lock`，并重跑 `pytest`。
+> 维护约定：改动 `requirements.txt` 的下界后，必须同步重新生成 `requirements.lock`（直接依赖区块须与实测版本逐条一致），并重跑 `pytest`（快测 + 全量）。
 
 ## 安装
 
 ```bash
-# 1. 获取代码
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
+# 1. 进入项目根目录（克隆或下载本仓库后）
+cd energy-dispatch-proj
 
 # 2. 创建虚拟环境（推荐，隔离依赖）
 python -m venv .venv
@@ -144,13 +190,19 @@ python -m venv .venv
 # Linux / macOS
 source .venv/bin/activate
 
-# 3. 安装依赖
-pip install -r requirements.txt          # 常规安装
-# 或：pip install -r requirements.lock   # 需要与已验证环境逐版本一致时
+# 3. 安装运行依赖（二选一）
+pip install -r requirements.txt     # 常规：允许补丁/次版本升级，仍在实测的主次版本线上
+pip install -r requirements.lock    # 严谨：逐版本完全一致（含传递依赖），推荐 CI / 生产环境
 
-# 4. 验证安装
+# 4. 可选：安装开发与测试依赖（pytest / coverage / httpx）
+pip install -r requirements-dev.txt
+
+# 5. 可选：验证安装（需先完成第 4 步）
 pytest -q
 ```
+
+> **`pytest` 不在运行依赖里**——它属于 `requirements-dev.txt`。只想跑起服务的话，完成第 3 步后
+> 直接跳到[快速开始](#快速开始)即可，无需安装第 4、5 步。
 
 仓库已内置演示数据集（`data/` 下四个 CSV），**安装完即可直接启动，无需额外准备数据**。如需重新生成模拟数据：
 
@@ -181,7 +233,7 @@ python backend/server.py
 - **方式一（推荐）**：启动前设置环境变量 `ADMIN_INITIAL_PASSWORD`，首启用它初始化管理员口令，首登后无需改密；
 - **方式二**：不设置时，首启会**生成随机强口令并仅在控制台打印一次**，请立即记录——若未读到控制台，删除 `config/auth.json` 后重启即可重新生成。
 
-登录后进入看板，点击**「开始求解」**触发完整调度流程（首次约 40 秒，含 MILP 求解；结果会落盘缓存，再次访问秒开）。
+登录后进入看板，点击**「开始求解」**触发完整调度流程（含 MILP 求解，本机实测 **26 ~ 43 秒**，随当日规模与机器性能变化；结果会落盘缓存，再次访问秒开）。
 
 > 未求解时直接访问数据接口会返回 `409 Conflict`，这是预期行为，先点一次「开始求解」即可。
 
@@ -303,14 +355,23 @@ energy-dispatch-proj/
 │       ├── cache_security.py            # 求解缓存 HMAC 验签 + 受限反序列化 + LRU
 │       ├── url_guard.py                 # SSRF 防护
 │       └── logger.py                    # 统一日志（RotatingFileHandler）
-├── data/                            # 内置演示数据（可直接运行）
+├── data/                            # 内置合成演示数据（可直接运行，非真实计量数据）
 │   ├── load/load_data.csv
 │   ├── load/dr_signals.csv          # DR 事件固定在最后一天（= 调度日）
 │   ├── price/typical_price.csv
 │   └── battery/battery_params.csv
 ├── tests/                           # pytest 真实断言，无占位用例
+├── docs/
+│   ├── experiments.md               # 完整实验记录 + 未复核项清单 + 复现命令
+│   └── screenshots/                 # README 引用的真实界面截图
+├── licenses/                        # 第三方许可原文归档
+│   ├── Apache-2.0.txt               # ECharts 许可原文
+│   ├── echarts-NOTICE.txt           # ECharts 上游 NOTICE（Apache-2.0 §4(d) 要求随附）
+│   └── zrender-BSD-3-Clause.txt     # ECharts 内嵌 ZRender 的许可原文
 ├── .env.example
 ├── .github/workflows/ci.yml         # CI：PR 快测 / nightly 全量 + 覆盖率
+├── LICENSE                          # 本项目 MIT 许可
+├── THIRD_PARTY_NOTICES.md           # 第三方组件与许可声明
 ├── requirements.txt / requirements-dev.txt / requirements.lock
 ├── pytest.ini                       # 测试配置（markers: slow / unit）
 └── start_web.bat / start_web.sh / restart_backend.bat
@@ -406,12 +467,15 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 | 日套利收益 | 756.53 元 | 1702.79 元 | 1834.58 元 |
 | 日衰减成本 | 130.04 元 | 504.67 元 | 525.58 元 |
 | 日净收益（套利 − 衰减） | 626.49 元 | **1198.12 元** | 1309.00 元 |
-| 日充电量 / 放电量 | 842 / 760 kWh ⁽¹⁾ | 3005.5 / 2712.4 kWh | 3368.8 / 3040.3 kWh |
-| 最高电池温度 | 42.3 ℃ | 46.99 ℃（降额区） | 57.12 ℃（已越过 55 ℃ 停机阈值） |
+| 最高电池温度 | 42.3 ℃ | 46.99 ℃（降额区） | 57.12 ℃（越过 55 ℃ 停机阈值） |
 | 求解时间 | < 0.1 s | 38 ~ 43 s（HiGHS, MIP gap = 0%） | 24.1 s |
 
-> ⁽¹⁾ 基准策略的充/放电量沿用早期记录，本次未单独复核；该列其余 5 项已逐项复核一致。
-> 复现环境：Python 3.13.14 + `requirements.lock`；本表「日净收益」列统一为**套利 − 衰减**（不含 DR 补贴），与基准同口径。
+> 复现环境：Python 3.13.14 + `requirements.lock`。本表「日净收益」统一为**套利 − 衰减**（不含 DR 补贴），与基准同口径。
+>
+> ⚠️ **调度日口径**：本表为 **2024-07-30**。系统默认调度日是内置演示数据的**最后一天（2024-07-15）**，
+> 因此你首次打开看板看到的数字与本表不同（例如界面截图显示日净收益 1623.85 元、最高温 48.3 ℃）。
+> 两者都是真实求解结果，只是日期不同，**不可横向比较**。2024-07-15 的完整实测数据见
+> [`docs/experiments.md`](docs/experiments.md)。
 
 **关键发现**
 
@@ -419,18 +483,23 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 2. **热约束的代价 −8.5%**（110.88 元/天）：换来温度从 57.12 ℃（已越过 55 ℃ 停机阈值）降到 46.99 ℃（进入 45–55 ℃ 线性降额区，距 55 ℃ 仍有 8.0 ℃ 余量）。
 3. **稳态口径 vs 单日口径**：单日口径含 DR 补贴可达 1731.89 元/天，但代价是把初始 SOC 0.5 放空到 0.2（吃掉 600 kWh 存量），不可持续；稳态口径（套利 − 衰减）**1198.12 元/天 × 365 ≈ 43.7 万元/年** 才是能拿到的数。
 
-### 负荷预测（30 天实测，2024-07-30 调度日）
+### 年化口径（三个，含义不同）
 
-| 方法 | MAPE |
-|------|------|
-| 项目 XGBoost + 物理修正 | 3.12% |
-| **朴素基线**（过去 14 天、分工作日/周末、同时刻均值） | **3.01%** |
-| XGBoost（去掉温度特征，纯 ML） | 2.98% |
-| XGBoost（去掉温度特征 + 物理修正）ablation | 2.99% ⁽¹⁾ |
+| 口径 | 结果 | 含义 |
+|------|------|------|
+| **同口径（推荐对外使用）** | **43.7 万元/年** | 与基准策略同口径，不含 DR 补贴 |
+| 含 DR | 46.4 万元/年 | DR 按"每周约 1 次有效事件 ≈ 50 天/年"计入 |
+| DR 每天都有（**不成立**） | 63.2 万元/年 | 与广东实际补贴频次不符 |
 
-> ⁽¹⁾ 后两行为早期记录，本次未复核。本次仅复核首两行：XGBoost 仍略输朴素基线 0.11 个百分点。
+### 负荷预测
 
-> **诚实说明：XGBoost 在本项目自带的合成数据上略输朴素基线**。合成数据是确定性日模式 + 3% 噪声，规律性极强，朴素基线天然占优。改进方向见[已知局限与路线图](#已知局限与路线图)。
+30 天实测（2024-07-30 调度日）：项目 XGBoost **3.12%** MAPE，朴素基线 **3.01%** ——
+**XGBoost 略输朴素基线 0.11 个百分点**。原因是合成数据为确定性日模式 + 3% 噪声，规律性极强，
+朴素基线天然占优。改进方向见[已知局限与路线图](#已知局限与路线图)。
+
+> 📄 **完整实验记录见 [`docs/experiments.md`](docs/experiments.md)**：三种策略逐项对比、
+> 负荷预测 ablation 明细、LLM 解释层评测、复现命令，以及**未复核项清单**。
+> 任何来自早期记录、本轮未重新验证的数字都在该文件里单独标注，引用时请先查该清单。
 
 ## 测试
 
@@ -439,13 +508,20 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 pytest
 
 # 全量（含真实 MILP 求解与端到端流程）
-pytest -m ""
+pytest -o addopts= -q
 
 # 覆盖率
-coverage run -m pytest -m "" && coverage report
+coverage run -m pytest -o addopts= && coverage report
 ```
 
-测试规模约 90+ 项，全部为真实断言（无占位用例）。其中 `slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+> ⚠️ **PowerShell 用户注意**：在 PowerShell 下 `pytest -m ""` 不生效（空字符串参数会被 shell 丢掉，
+> pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
+> `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
+
+测试规模 **92 项**（快测 70 项 + `slow` 22 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+
+CI 状态徽章未放入本 README：动态徽章需要真实的仓库路径（`OWNER/REPO`），而仓库尚未建立。
+`.github/workflows/ci.yml` 已就位，首次推送后按 GitHub 提示复制徽章 Markdown 即可启用。
 
 | 测试文件 | 覆盖内容 |
 |----------|----------|
@@ -546,7 +622,20 @@ test(thermal): 补充热模型末点边界断言
 
 本项目采用 **MIT License**，详见 [`LICENSE`](LICENSE)。
 
+```
+Copyright (c) 2026 qingfeng092802 (qingfeng092802)
+```
+
 你可以自由使用、修改、分发本项目（包括商业用途），但需保留原始版权声明与许可证文本。软件按"现状"提供，不附带任何形式的担保。
+
+### 第三方组件
+
+本项目**随仓库分发**了 Apache ECharts（`web/vendor/echarts.min.js`，Apache-2.0），其内部还包含
+ZRender（BSD 3-Clause）与 Microsoft 的 0BSD 授权片段。版权与许可声明见
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，许可原文归档在 [`licenses/`](licenses/)。
+
+Python 依赖不随仓库分发，由 pip 从 PyPI 安装，许可证随各自发行包提供；生成完整清单的方式见
+第三方组件声明文档。
 
 ---
 

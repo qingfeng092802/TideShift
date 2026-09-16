@@ -22,8 +22,9 @@
   （0.52.1 → 0.53.0，Web 栈按主版本收口）。
   另补声明 `langchain-core`——它被 `src/agents/chat_agent.py` 直接 import。
 
-- **`requirements.lock` 说明修正**：明确其锁定范围为**直接依赖**（21 项），不含传递依赖；
-  原注释"由验证环境 pip freeze 生成"易被误读为全量冻结。
+- **`requirements.lock` 升级为完整锁**：由「21 条直接依赖」扩为**包含全部传递依赖的完整锁**
+  （76 个包 = 直接 20 + 传递 56），并修正原注释的误导——它并非 pip freeze 全量冻结。
+  锁文件不含 hash，原因（跨平台 / hash 按平台记录）已写入文件头。
 
 - **`requirements-dev.txt`**：改为与 `requirements.txt` 同口径的显式区间。
 
@@ -34,14 +35,64 @@
 
 - **`LICENSE`**：MIT，版权署名 qingfeng092802 (qingfeng092802)。
 
+- **新增 `THIRD_PARTY_NOTICES.md` + `licenses/`**：声明随仓库分发的 Apache ECharts 5.6.0
+  （Apache-2.0），以及其内嵌的 ZRender（**BSD 3-Clause**，非 Apache-2.0）与 Microsoft 代码片段
+  （0BSD）。归档 ECharts 上游 NOTICE（满足 Apache-2.0 第 4(d) 条）与两份许可原文。
+
+- **新增 `docs/experiments.md`**：把 README 中被压缩的完整实验数据、ablation 明细、
+  LLM 解释层评测与**未复核项清单**移入独立文档，README 只留结论与链接。
+
+- **新增 `docs/screenshots/`**：真实界面截图（欢迎页 / 数据总览浅色 / 充放电调度 /
+  电池热管理 / 数据总览深色）。由 Playwright 驱动真实登录与求解流程生成，未改动任何前端代码。
+
+- **新增 `docs/experiments.md` 的 Web 端实测小节**：记录 2026-09-16 在调度日 2024-07-15 上的
+  端到端实测（服务端日志 `求解完成 key=cc6c36b0 用时=26.5s`），含当日收益/温度/循环数与
+  链路健康判据（负荷预测 MAPE 2.88% vs 朴素基线 2.85%、物理修正近零、解释层降级 rule）。
+
+- **README 求解耗时口径校正**：原写「首次约 40 秒」，实测 2024-07-15 为 **26.5 秒**，
+  2024-07-30 为 38~43 秒。已改为「本机实测 **26 ~ 43 秒**，随当日规模与机器性能变化」。
+
+- **README 补「调度日口径」警示**：量化成果表为 2024-07-30，而系统默认调度日是内置演示数据
+  的最后一天（2024-07-15），首次打开看板看到的数字与表不同，已显式说明两者不可横向比较。
+
+### 修复（Fixed）· 首轮对外评审发现的问题
+
+- **🟠 README 安装步骤与依赖不一致**：安装章节在 `pip install -r requirements.txt` 之后直接给
+  `pytest -q`，但 `pytest` 属 `requirements-dev.txt`——只装运行依赖的用户执行该命令必然失败。
+  已拆为「运行依赖 → 可选开发依赖 → 可选验证」三步，并显式标注 pytest 的归属。
+
+- **🟠 `requirements.lock` 描述自相矛盾**：依赖表写「不含传递依赖」，安装章节又说「逐版本完全
+  一致」。已按「完整锁」重做（见上），两处口径统一。
+
+- **🟠 README 残留发布占位符**：`git clone https://github.com/<owner>/<repo>.git` 与顶部
+  `<!-- TODO -->` 的 CI 徽章注释块。已改为**零占位符**写法（clone 章节用「进入项目根目录」表述，
+  徽章块移除）。
+
+- **🟠 静态 Tests 徽章与正文不一致**：徽章写 `70 passed`，正文写「约 90+ 项」。已统一为实测值
+  **92 项**（70 快测 + 22 slow），并在测试章节写明拆分。
+
+- **🟡 量化成果表混入未复核数据**：脚注中的「沿用早期记录/未复核」行移入 `docs/experiments.md`
+  的**未复核项清单**，README 主表只保留已复核项。
+
+- **🟡 文档未覆盖 vendored 第三方许可**：已补 `THIRD_PARTY_NOTICES.md` 与 `licenses/`。
+
+- **🟡 `pytest -m ""` 在 PowerShell 下失效**：README 测试章节原先给出该命令，实测在 PowerShell
+  下报 `argument -m: expected one argument`（空字符串参数被 shell 丢弃）。已改为
+  `pytest -o addopts= -q` 并给出等价表达式与平台说明。
+
+- **🟡 公网部署提示与数据来源声明不够显眼**：已提升为顶部两段独立提示块。
+
 ### 验证（Verified）
 
-- `pytest` 快测 **70 项通过**（Python 3.13.14 + `requirements.lock` 对应版本）。
+- `pytest` 快测 **70 项通过**、全量（含 slow）**92 项通过**（Python 3.13.14 + `requirements.lock`）。
 - `git add -A` 后纳入版本控制 **67 个文件**；`config/`、`.env`、`logs/`、`.solve_cache/`
   经 `git check-ignore` 确认均被正确排除。
 - 后端启动冒烟：`/api/system-info` 返回版本 `2.4.4-fix30`；未带 token 访问
-  `/api/page/dashboard` 返回 401（认证门生效）；首启经 `ADMIN_INITIAL_PASSWORD` 登录返回 200。
-- `pip install --dry-run -r requirements.txt` 解析通过，未出现依赖冲突。
+  `/api/page/dashboard` 返回 401（认证门生效）；首启经 `ADMIN_INITIAL_PASSWORD` 登录返回 200；
+  未求解时该端点返回 409（预期行为）。
+- `pip install --dry-run --report` 实测：`requirements.txt` 与 `requirements.lock` 均可解析，
+  无依赖冲突；收口后直接依赖不跨次版本跳变。
+- 截图由 Playwright 驱动真实 UI 生成（登录 → 自动求解 → 逐页截图），未改动任何前端代码。
 
 ### 说明（Notes）
 
@@ -49,6 +100,10 @@
   它们对应一份未随仓库分发的内部审查报告，且该写法分布于 `backend/`、`src/`、`tests/`、`web/`
   共 **39 个文件**（按 `🔴|🟠|🟡|🟢|P0-x|P1-x|P2-x` 精确匹配统计，已排除 CSS 十六进制颜色
   一类误匹配）。此项属独立的注释清理工作，与文档/配置重写不同层，不影响功能与运行。
+
+- **版本号保持 `2.4.4-fix30`**：它是合法的 SemVer 预发布标识（优先级高于 `2.4.4`），且与历史
+  `fix21~fix30` 命名连续。若将来改为 `2.4.4+fix30`，注意构建元数据不参与版本优先级比较，
+  语义会弱于预发布标识。版本号三处（`src/__init__.py`、本文件、README 徽章）当前一致。
 
 ## [2.4.4-fix30] - 2026-09-14（交付审查问题闭环）
 
