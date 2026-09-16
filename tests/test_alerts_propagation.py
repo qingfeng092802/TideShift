@@ -85,12 +85,12 @@ def client_with_report(monkeypatch):
 
 def test_dashboard_exposes_alerts_field_with_content(client_with_report):
     """核心回归：dashboard 必须把 report.alerts 下发到顶层 alerts 字段。"""
-    c = client_with_report(["负荷预测已降级：历史数据不足 8 天"])
+    c = client_with_report(["负荷预测已降级：历史数据不足 11 天"])
     r = c.get("/api/page/dashboard")
     assert r.status_code == 200
     body = r.json()
     assert "alerts" in body, "dashboard 返回体缺少 alerts 字段（前端告警条将永不显示）"
-    assert body["alerts"] == ["负荷预测已降级：历史数据不足 8 天"]
+    assert body["alerts"] == ["负荷预测已降级：历史数据不足 11 天"]
 
 
 def test_dashboard_alerts_key_present_even_when_empty(client_with_report):

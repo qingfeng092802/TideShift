@@ -93,6 +93,25 @@ def _fernet() -> Fernet:
 
 
 def _config_dir() -> str:
+    """认证与密钥的落盘目录。
+
+    默认是项目根的 `config/`；可用环境变量 **`ENERGY_CONFIG_DIR`** 覆盖。
+
+    为什么需要覆盖（缺它会导致一个阻断级问题）：
+      `config/auth.json` 一旦存在，服务启动就跳过 `_create_default()`，
+      `ADMIN_INITIAL_PASSWORD` 被**静默忽略**，用户按 README 的
+      「装依赖 → 跑 pytest → 启动」路径操作后，任何口令都登录失败。
+      根因是 pytest 会把测试实例化的 AuthStore 写进**仓库工作树**。
+      测试通过 `ENERGY_CONFIG_DIR` 指向临时目录即可彻底隔离。
+    """
+    override = (os.environ.get("ENERGY_CONFIG_DIR") or "").strip()
+    if not override:
+        # 兼容别名：另有一份针对同一缺陷的修复采用 AUTH_CONFIG_DIR。
+        # 同时接受两个名字，避免两侧修复合并时因命名不一致而**静默复发**
+        # （表现为测试重新污染工作树 → 服务忽略 ADMIN_INITIAL_PASSWORD）。
+        override = (os.environ.get("AUTH_CONFIG_DIR") or "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
 
 
@@ -186,6 +205,15 @@ class AuthStore:
                 with open(self.path, "r", encoding="utf-8") as f:
                     d = json.load(f)
                 if d.get("hash"):
+                    # 口令文件已存在 → 不走 _create_default()，ADMIN_INITIAL_PASSWORD **不生效**。
+                    # 这正是"跑完 pytest 再启动服务后任何口令都登录失败"的现场：
+                    # 残留的 auth.json 若是测试生成的随机口令，用户设的初始口令会被静默忽略，
+                    # 且从报错信息里完全看不出来。此处显式告警，给出可执行的恢复动作。
+                    if os.getenv("ADMIN_INITIAL_PASSWORD", "").strip():
+                        log.warning(
+                            "⚠️  检测到已存在的口令文件 %s —— ADMIN_INITIAL_PASSWORD 本次"
+                            "**不会生效**（初始口令仅在首次创建时读取）。若这不是你设置的口令，"
+                            "请停止服务、删除该文件后重新启动。", self.path)
                     return d
             except Exception:
                 pass

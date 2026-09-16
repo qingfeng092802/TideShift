@@ -34,10 +34,39 @@ class ForecastResult:
     fallback_reason: str = ""
 
 
-# 训练样本下限：滞后特征含 lag_672（7 天），历史不足 8 天时 dropna 后训练集为空。
+# 训练样本下限：滞后特征含 lag_672（7 天），dropna 会先丢掉前 7 天；再加上固定的
+# test_days 天测试集切分与 1 天训练下限，真实最少历史天数为 required_history_days()。
+# 注意：早期注释写"不足 8 天"是错的——8 天刚够抵消滞后开销，扣掉测试集就为 0。
 # 此时若仍强行 fit，XGBoost 会学出荒谬映射，并让残差拟合出的温度斜率爆炸
 # （实测物理修正量可达 2.7 万 kW 量级），进而把后续 MILP 推向求解时限。
 MIN_TRAIN_ROWS = 96
+
+# 滞后特征的最大回看点数：`lag_672` = 7 天 × 96 点。`_create_features` 之后
+# `dropna()` 会丢掉前 672 行，这是"最少历史天数"的组成部分之一。
+LAG_POINTS = 672
+POINTS_PER_DAY = 96
+
+
+def required_history_days(test_days: int = 3) -> int:
+    """训练 XGBoost 所需的最少历史天数（确定性推算，供文档/告警/校验共用）。
+
+    门槛由三项开销叠加，不是"滞后特征要 7 天"这么简单：
+
+      1. **滞后特征**：`lag_672` 使 `dropna()` 丢掉前 ``LAG_POINTS``（672）行；
+      2. **测试集固定切分**：`train()` 从**尾部**切走 ``test_days * 96`` 行（默认 3 天）；
+      3. **训练样本下限**：剩余训练样本须 ≥ ``MIN_TRAIN_ROWS``（96 行 = 1 天）。
+
+    即需满足 ``N*96 - LAG_POINTS - test_days*96 >= MIN_TRAIN_ROWS``，
+    向上取整得最少天数 ``ceil((MIN_TRAIN_ROWS + test_days*96 + LAG_POINTS) / 96)``。
+
+    默认参数下为 **11 天**（此前文档与注释写的"8 天"是错的——8 天只够抵消滞后开销，
+    再扣掉 3 天测试集与 1 天训练下限就不足了）。
+
+    注意：本函数假设历史数据**无缺口**。源数据本身有 NaN 时 ``dropna()`` 会丢更多行，
+    以 ``train()`` 运行时的实际条数判定为准（本函数只用于事前提示与文档口径）。
+    """
+    need_rows = MIN_TRAIN_ROWS + test_days * POINTS_PER_DAY + LAG_POINTS
+    return -(-need_rows // POINTS_PER_DAY)  # 向上取整
 
 
 class NaiveBaselineForecaster:
@@ -308,13 +337,14 @@ class LoadForecastAgent:
 
         log.info(f"[负荷预测Agent] 训练集: {len(X_train)} 条, 测试集: {len(test_df) if test_df is not None else 0} 条")
 
-        # 🟠 数据量下限：滞后特征（lag_672 = 7 天）会把历史不足 8 天的数据整表 dropna，
-        #    得到 0 条训练样本。此处显式判定"数据不足"，不 fit，交由 predict() 降级为
-        #    朴素基线；同时置 self.model = None，确保任何读取方都不会拿到未训练模型。
+        # 🟠 数据量下限：滞后特征（lag_672 = 7 天）会先被 dropna 丢掉 7 天，再扣掉
+        #    固定 3 天测试集，剩余才用于训练。真实门槛由 required_history_days() 推算
+        #    （默认 11 天），不是"8 天"。不足时不 fit，交由 predict() 降级为朴素基线。
         if len(X_train) < MIN_TRAIN_ROWS:
-            log.warning("[负荷预测Agent] 历史数据不足：dropna 后仅 %d 条训练样本（需 ≥ %d，"
-                        "滞后特征含 7 天前同期值）。本次不训练 XGBoost，改用朴素基线。",
-                        len(X_train), MIN_TRAIN_ROWS)
+            log.warning("[负荷预测Agent] 历史数据不足：dropna 后仅 %d 条训练样本（需 ≥ %d）。"
+                        "按当前切分口径（lag_672 占 7 天 + 测试集 %d 天 + 训练下限 1 天）"
+                        "约需 %.0f 天历史数据；本次不训练 XGBoost，改用朴素基线。",
+                        len(X_train), MIN_TRAIN_ROWS, test_days, required_history_days(test_days))
             self.is_trained = False
             self.model = None
             self._insufficient_data = True   # 记住"已判定数据不足"，避免每次预测重复训练
@@ -413,7 +443,8 @@ class LoadForecastAgent:
         if not self.is_trained and not self._insufficient_data:
             self.train(hist)
 
-        # 🟠 降级路径：历史数据不足以训练 XGBoost（滞后特征需 ≥ 8 天）时，
+        # 🟠 降级路径：历史数据不足以训练 XGBoost（真实门槛见 required_history_days()，
+        #    默认 11 天而非早期文档所写的 8 天）时，
         #    显式改用朴素基线（过去 14 天同时刻均值，区分工作日/周末），并且
         #    **不做物理修正**——修正量由训练数据拟合，没有可靠训练集时套用
         #    物理公式会得到量级失真的结果（实测曾出现 2.7 万 kW 量级的修正）。
@@ -441,8 +472,9 @@ class LoadForecastAgent:
                 correction_magnitude_kw=0.0,
                 mape_without_correction=round(_mape, 2),
                 baseline_mape=round(_mape, 2),
-                fallback_reason=(f"历史数据不足（滞后特征需 ≥ 8 天，当前训练样本不足 "
-                                 f"{MIN_TRAIN_ROWS} 条），已降级为朴素基线预测"),
+                fallback_reason=(f"历史数据不足（约需 ≥ {required_history_days()} 天："
+                                 f"滞后特征占 7 天 + 测试集 3 天 + 训练下限 1 天；"
+                                 f"当前训练样本不足 {MIN_TRAIN_ROWS} 条），已降级为朴素基线预测"),
             )
 
         # 防泄漏断言：预测日必须不在训练集（训练数据里不允许出现预测日任何一点）

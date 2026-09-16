@@ -348,11 +348,26 @@ class RuleBasedAgent:
             return self.tools.explain_schedule(hour)
 
         # v1.2：整日决策解释（LLM 优先，无 Key 自动降级规则模板）
-        if any(k in text for k in ["解释", "为什么", "为啥", "分析", "总结", "解读", "决策", "怎么安排的", "思路"]):
+        # 「策略」单列入此：此前只靠下游的裸字 "调" 命中，"调度策略"被误路由到
+        # 「调整参数重跑」分支，用户问调度策略得到的是调参提示。
+        if any(k in text for k in ["解释", "为什么", "为啥", "分析", "总结", "解读", "决策",
+                                   "怎么安排的", "思路", "策略"]):
             return self.tools.explain_day(user_input)
 
         # 重新运行/调参
-        if any(k in text for k in ["重跑", "重新", "再跑", "调", "改成", "设为", "调到"]):
+        # ⚠️ 关键词必须同时锚定「动作词 + 参数对象」，不能只靠单个汉字。
+        #    历史问题：列表里含裸字 "调"，而「调度」「协调」都含 "调"，
+        #    导致「今天的调度策略是什么？」误进本分支（返回调参提示而非解释）。
+        #    只把 "调" 换成 "调一下" 也不够——「协调一下」同样含该子串。
+        #    因此改为：① 明确的"重跑"类动词直接命中；
+        #              ② 调参类动词必须与参数对象同时出现才命中。
+        RUN_VERBS = ("重跑", "重新跑", "再跑", "重算", "重新算")
+        ADJUST_VERBS = ("调整", "调一下", "调成", "调到", "改成", "设为")
+        PARAM_WORDS = ("soc", "功率", "上限", "下限", "热约束", "温度约束",
+                       "需求响应", "dr", "kw", "千瓦", "参数")
+        if any(k in text for k in RUN_VERBS) or (
+                any(k in text for k in ADJUST_VERBS)
+                and any(k in text for k in PARAM_WORDS)):
             params = {}
             soc_min_m = re.search(r'soc.{0,5}(?:下限|最低|min).{0,5}(\d{1,3})', text)
             soc_max_m = re.search(r'soc.{0,5}(?:上限|最高|max).{0,5}(\d{1,3})', text)

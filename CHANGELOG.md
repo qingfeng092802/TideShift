@@ -108,10 +108,77 @@ P0/P1 无项；其中 P3 项 F2 已在本轮修复：
   已把默认值改为 `server.AUTH.username`，并新增 `_auth_headers()` 便捷函数；
   新增用例实际调用过该路径后才发现此问题。
 
+### 修复（Fixed）· 第三方核验报告闭环（Bug 2~6）
+
+外部测试方对一份带 AIGC 标识的报告逐条核验后给出「6 条中 5 条属实」的判定。逐条自证与处置：
+
+- **🔴 Bug 2（阻断级）· 跑完 `pytest` 后服务忽略 `ADMIN_INITIAL_PASSWORD`，任何口令都登录失败**
+  **本轮最高优先级修复。** 报告称该问题"已在测试副本修复"——但那是对方副本，本仓库**未修**，
+  且它是可复现的：`backend/server.py` 在**导入时**即实例化 `AuthStore`，而 `_config_dir()`
+  默认指向 `<项目根>/config/`，因此跑一次 pytest 就会在工作树留下 `config/auth.json`、
+  `config/.auth_secret`、`config/.api_secret`。用户按 README「装依赖 → 跑 pytest → 启动服务」
+  操作时，服务读到测试生成的随机口令而跳过 `_create_default()`，环境变量被**静默忽略**。
+  修复分四处：
+  1. `auth.py`：`_config_dir()` 支持 `ENERGY_CONFIG_DIR` 覆盖（三个凭据文件同源受益）；
+  2. `tests/conftest.py`：模块级把配置目录与缓存密钥目录重定向到会话级临时目录，
+     并在会话结束时清理——测试状态与仓库工作树彻底隔离；
+  3. `auth.py`：已存在口令文件且检测到 `ADMIN_INITIAL_PASSWORD` 时**显式告警**
+     （原实现是静默忽略，用户无从自查），并给出恢复动作；
+  4. `README` / `.env.example`：补 `ENERGY_CONFIG_DIR` 说明与该故障的恢复步骤（常见问题）。
+  验证：清空 `config/` 后跑 pytest，`git status --porcelain` 只列出源码改动，**无任何 config/ 污染**。
+
+- **🟠 Bug 3 · 负荷预测"≥8 天"门槛是错的，真实门槛 11 天**
+  机制确认：`dropna()`（`lag_672` 占 7 天）→ 尾部固定切走 `test_days*96`（3 天）→ 训练样本须
+  ≥ `MIN_TRAIN_ROWS`（96 点 = 1 天）。即 `N*96 - 672 - 288 >= 96` → **N ≥ 11**。
+  修复：新增纯函数 `required_history_days(test_days=3)` 作为**唯一口径来源**，
+  告警日志与面向用户的 `fallback_reason` 改由它生成；同步修正 `README`（两处）与源码注释。
+  实测边界：10 天 `is_trained=False`、11 天 `is_trained=True`。
+
+- **🟠 Bug 4 · 温度断言过拟合单次求解值（余量仅 0.51℃）**
+  实测确认：2024-07-30 后验峰值 **46.988℃**，旧断言上界 `temp_normal_max + 2.5 = 47.5℃` ——
+  余量 0.51℃，而 Web 路径的 2024-07-15 为 48.3℃，换求解器版本或换调度日即失败。
+  修复：把"观测值当上界"改为**显式预算分解**（`DESIGN_OVERSHOOT_BUDGET_C` 设计裕度 +
+  `SOLVER_TOLERANCE_C` 求解器数值容差，各自注明来源），硬红线仍兜底；
+  并**新增对照组断言** `test_thermal_constraint_actually_lowers_peak`——关闭热约束后峰值必须
+  显著更高（实测 46.99℃ vs 57.12℃，机制降温 **10.14℃**）且必须越过安全停止线。
+  这样测的是"机制是否生效"，而不是"是否等于某次解"。
+
+- **🟡 Bug 5 · 对话误路由：裸字 `"调"` 使「调度/协调」类提问进入调参分支**
+  修复：取消单字匹配，改为**动作词 + 参数对象同时命中**才进调参分支（明确的"重跑"类动词除外）；
+  并把「策略」补进整日解释分支，使「今天的调度策略是什么？」正确返回调度解释。
+  （只把"调"换成"调一下"并不够——「协调一下」同样含该子串，已用测试覆盖。）
+
+- **🟡 Bug 6 · 默认调度日与 `dr_signals.csv` 的文档口径错误**
+  实测确认：`default_date()` 对 30 天数据返回 **2024-07-15（中间日）**，
+  README 却写成"最后一天"；`dr_signals.csv` 的加载函数 `load_dr_signals()` **全局从未被调用**，
+  Web 流程的 DR 事件是按所选调度日**硬编码生成**的两组，改该 CSV 不会影响界面。
+  修复：改正 README 的默认日描述与项目结构注释，并新增两条常见问题
+  （"DR 事件是哪来的""默认调度日是哪一天"）。**未改 `default_date()` 行为**——
+  它刻意不硬编码日期，避免内置数据换区间后默认日落在数据之外；行为与文档现已一致。
+
+- **🔴 新发现（本轮自查）· ML 测试是假阴性：从未训练过 XGBoost**
+  修复 Bug 3 时顺带发现：`tests/test_load_forecast_ml.py` 用 10 天合成数据（低于 11 天门槛）
+  → `is_trained=False`、`model=None`，测试实际走的是朴素基线降级路径，而原断言
+  `mape < 15.0` 恒真（`mape` 恒为 0）。**根因有两层**：① 天数不足；② 夹具
+  `pd.date_range(end="2024-07-30", ...)` 的终点是**当日 00:00**，故"预测日"只有 1 行，
+  `len(forecast_day_data) >= 96` 不成立 → `actual_load=None` → MAPE 从不计算。
+  修复：夹具默认改为 14 天且 `end_date` 落到当日 23:45；用例内**先断言真的走了 ML**
+  （`is_trained is True`、`fallback_reason == ""`、`physical_correction_applied is True`）
+  再断言精度，杜绝降级路径蒙混通过。
+
 ### 验证（Verified）
 
-- `pytest` 快测 **75 项通过**、全量（含 slow）**97 项通过**（Python 3.13.14 + `requirements.lock`；
-  本轮新增 5 项测试，测试总数由 70/92 增至 75/97，README 徽章与测试章节已同步）。
+- `pytest` 快测 **79 项通过**、全量（含 slow）**102 项通过**（Python 3.13.14 + `requirements.lock`；
+  本轮修复 Bug 2~6 并新增 5 项测试，测试总数由 75/97 增至 79/102，README 徽章与测试章节已同步）。
+- **Bug 2 隔离效果实测**：清空 `config/` 后跑完整测试套件，`git status --porcelain` 只列出源码改动，
+  **无任何 `config/` 文件被创建**——测试不再污染仓库工作树。
+- **Bug 3 边界实测**：10 天数据 `is_trained=False`、11 天 `is_trained=True`（与 `required_history_days()` 一致）。
+- **Bug 4 对照组实测**：峰值温度含热约束 **46.99℃** / 无热约束 **57.12℃** → 机制降温 **10.14℃**，
+  且无约束工况越过 55℃ 安全停止线（对照组具备判别力）。
+- **Bug 5 路由核验**：「今天的调度策略是什么？」「帮我协调一下充放电安排」「调度结果解释一下」
+  均不再进入调参分支；「帮我调整一下参数」仍正确进入。
+- **`ENERGY_CONFIG_DIR` 覆盖优先级核验**：默认→项目 `config/`；仅 `AUTH_CONFIG_DIR`（兼容别名）→ 生效；
+  仅 `ENERGY_CONFIG_DIR` → 生效；两者同时设置→以 `ENERGY_CONFIG_DIR` 为准；仅空白值→忽略。
 - F2 修复经**真实 uvicorn 端到端**复验：`POST /api/explain` → 字段 `['source','text']`、
   `source='rule'`；`POST /api/chat` → 字段 `['history','mode','reply']`、`mode='rule'`。
 - `node --check web/js/pages.js` 语法校验通过（前端改动无语法错误）。

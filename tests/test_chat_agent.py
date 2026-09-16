@@ -120,5 +120,28 @@ def test_explain_day_source_none_without_schedule():
     assert t.last_explain_source == "none"
 
 
+def test_routing_does_not_misfire_on_dispatch_keywords(tools):
+    """Bug 5：含「调度 / 协调」的提问不得被误路由到「调参重跑」分支。
+
+    此前关键词列表含裸字 `"调"`，而「调度」「协调」都含「调」，
+    导致「今天的调度策略是什么？」返回的是"我可以帮你调整参数重跑"提示，
+    而不是调度解释。
+
+    注意：本用例只用**无参数可提取**的调参语句（如"调整一下参数"），
+    避免真的触发 run_with_params 重跑 MILP 而拖慢快测。
+    """
+    t, _ = tools
+    agent = create_agent(t.ctx, api_key="")
+
+    for q in ["今天的调度策略是什么？", "帮我协调一下充放电安排", "调度结果解释一下"]:
+        resp = agent.respond(q)
+        assert "调整参数重跑" not in resp, \
+            f"「{q}」被误路由到调参分支（裸字 '调' 的误命中）：{resp[:120]}"
+
+    # 真正的调参意图必须仍然命中（无参数可提取 → 返回引导语，不触发重跑）
+    resp = agent.respond("帮我调整一下参数")
+    assert "调整参数重跑" in resp, f"调参意图未被识别：{resp[:120]}"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

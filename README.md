@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-97%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-102%20passed-brightgreen)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
 
 </div>
@@ -264,7 +264,7 @@ python backend/server.py
 
 标准格式中 `price` / `temp` 可省略：省略时按广东工商业分时电价与季节温度模型自动补全，弹窗会**显式标注哪一列是补全的**。
 
-> ⚠️ 负荷预测需要 **≥ 8 天历史数据**（滞后特征含 7 天前同期值）。历史不足时系统自动降级为朴素基线预测并**不做物理修正**，同时在总览页显示降级告警——这是刻意设计，避免用不足的数据硬训模型产出一组看似正常实则失真的数字。
+> ⚠️ 负荷预测需要 **≥ 11 天历史数据**。这个门槛由三项开销叠加决定：滞后特征 `lag_672` 占 7 天、测试集固定切走 3 天、训练样本下限 1 天（`required_history_days()` 为唯一口径来源，此前文档写的"8 天"是错的——8 天只够抵消滞后开销）。历史不足时系统自动降级为朴素基线预测并**不做物理修正**，同时在总览页显示降级告警——这是刻意设计，避免用不足的数据硬训模型产出一组看似正常实则失真的数字。
 
 ### 配置 LLM（可选）
 
@@ -317,6 +317,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `ENERGY_LOG_LEVEL` | `info` | uvicorn 日志级别 |
 | `ADMIN_INITIAL_PASSWORD` | 空 | 首启管理员口令；留空则生成随机口令并打印到控制台 |
 | `ENERGY_CACHE_SECRET_FILE` | `config/.cache_secret` | 缓存 HMAC 签名密钥路径 |
+| `ENERGY_CONFIG_DIR` | `config/` | **认证与密钥落盘目录**（`auth.json` / `.auth_secret` / `.api_secret`）。测试与只读部署用它把可变状态移出代码目录；pytest 会自动指向临时目录 |
 | `LLM_TEST_ALLOW_HOSTS` | 空 | SSRF 白名单逃生口，仅自建 LLM 网关时需要 |
 
 **部署到公网前请务必阅读**：本项目面向单机/内网场景设计，公网部署至少需要（1）修改默认管理员口令、（2）配置 HTTPS 反向代理、（3）限制 `config/` 与 `.solve_cache/` 目录的访问权限。
@@ -357,7 +358,7 @@ energy-dispatch-proj/
 │       └── logger.py                    # 统一日志（RotatingFileHandler）
 ├── data/                            # 内置合成演示数据（可直接运行，非真实计量数据）
 │   ├── load/load_data.csv
-│   ├── load/dr_signals.csv          # DR 事件固定在最后一天（= 调度日）
+│   ├── load/dr_signals.csv          # DR 事件**示例数据**（⚠️ Web 流程不读取，见常见问题）
 │   ├── price/typical_price.csv
 │   └── battery/battery_params.csv
 ├── tests/                           # pytest 真实断言，无占位用例
@@ -472,8 +473,9 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 
 > 复现环境：Python 3.13.14 + `requirements.lock`。本表「日净收益」统一为**套利 − 衰减**（不含 DR 补贴），与基准同口径。
 >
-> ⚠️ **调度日口径**：本表为 **2024-07-30**。系统默认调度日是内置演示数据的**最后一天（2024-07-15）**，
-> 因此你首次打开看板看到的数字与本表不同（例如界面截图显示日净收益 1623.85 元、最高温 48.3 ℃）。
+> ⚠️ **调度日口径**：本表为 **2024-07-30**。系统默认调度日取自可用日期列表的**中间日**
+> （`dates[(len(dates)-1)//2]`；内置 30 天数据集为 2024-07-01 ~ 07-30，故默认为 **2024-07-15**），
+> 因此首次打开看板看到的数字与本表不同（例如界面截图显示日净收益 1623.85 元、最高温 48.3 ℃）。
 > 两者都是真实求解结果，只是日期不同，**不可横向比较**。2024-07-15 的完整实测数据见
 > [`docs/experiments.md`](docs/experiments.md)。
 
@@ -518,7 +520,7 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **97 项**（快测 75 项 + `slow` 22 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+测试规模 **102 项**（快测 79 项 + `slow` 23 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
 
 > 若 `tests/test_server_api.py` 在某个受限环境里首个用例就失败并报
 > `PermissionError: [WinError 10013]`：那是 `TestClient` 依赖 loopback `socketpair()` 被沙箱拦截，
@@ -554,7 +556,10 @@ CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC
 | **端口 8800 被占用** | 改 `ENERGY_PORT` 环境变量，或使用 `restart_backend.bat`（会先释放端口） |
 | **求解明显变慢（分钟级）** | 多半是 `highspy` 未装上，`pulp.HiGHS` 抛异常后静默回退到 CBC（约慢 4~5 倍）。检查 `pip show highspy` |
 | **解释层一直是"规则模板"** | 未配置 LLM Key，或 Key 无效/网络不通——这是设计好的降级行为，不影响主流程 |
-| **上传数据后预测精度很差** | 历史数据不足 8 天会降级为朴素基线且不做物理修正，总览页会有降级告警 |
+| **上传数据后预测精度很差** | 历史数据不足 11 天会降级为朴素基线且不做物理修正，总览页会有降级告警。门槛由 `required_history_days()` 推算：滞后特征 7 天 + 测试集 3 天 + 训练下限 1 天 |
+| **DR 事件是从 `data/load/dr_signals.csv` 读的吗？** | **不是**。Web 流程按当前所选调度日**自动生成**两组默认 DR 事件（15:00–17:00 / 19:30–20:30），另支持页面手工触发与 `POST /api/dr/trigger`。`dr_signals.csv` 只是离线示例数据，其加载函数 `load_dr_signals()` 目前仅被测试引用，不在 Web 链路上——不要误以为改这个 CSV 能改变界面上的 DR 事件 |
+| **默认调度日是哪一天？** | 取可用日期列表的**中间日**（`dates[(len(dates)-1)//2]`）。内置 30 天数据集为 2024-07-01 ~ 07-30，故默认 **2024-07-15**；上传自有数据后默认日随之变化。该规则刻意不硬编码日期，避免内置数据换区间后默认日落在数据之外导致页面空白 |
+| **跑完 `pytest` 后启动服务，`ADMIN_INITIAL_PASSWORD` 不生效 / 任何口令都登录失败** | 早期版本会出现：测试把凭据写进了仓库 `config/`，服务读到测试生成的随机口令而跳过初始化。**现已修复**（测试状态隔离到临时目录，可用 `ENERGY_CONFIG_DIR` 覆盖）。若仍遇到，删除 `config/auth.json` 后重启，即会按 `ADMIN_INITIAL_PASSWORD` 重新初始化 |
 
 ## 贡献指南
 

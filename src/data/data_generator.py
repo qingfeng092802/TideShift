@@ -251,8 +251,13 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
 if __name__ == "__main__":
     import os
     os.chdir(Path(__file__).parent.parent.parent)
-    # v1.1：DR 事件固定生成在最后一天（= 默认调度日），
-    # 否则事件散落在 30 天里，跑某一天调度时可能一个事件都命中不到。
+    # v1.1：DR 事件统一生成在数据集的**最后一天**，避免事件散落在 30 天里、
+    # 离线跑某一天时一个事件都命中不到。
+    # ⚠️ 需要注意的口径差异：Web 流程**不读取**该 CSV——它的 DR 事件按当前所选
+    # 调度日即时生成。而系统默认调度日是可用日期的**中间日**（`server.default_date()`，
+    # 30 天数据为 2024-07-15），因此这份 CSV 的日期（2024-07-30）与默认调度日**并不重合**；
+    # 它只作为离线示例数据，供 `load_dr_signals()` 与离线实验使用。
+    # 若要让二者重合，应改为按 default_date() 的规则取中间日。
     _days, _start = 30, "2024-07-01"
     _schedule_date = (pd.Timestamp(_start) + pd.Timedelta(days=_days - 1)).strftime("%Y-%m-%d")
     generate_all_data(days=_days, schedule_date=_schedule_date)

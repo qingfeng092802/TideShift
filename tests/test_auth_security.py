@@ -39,6 +39,33 @@ def test_jwt_alg_confusion_rejected():
     assert auth_mod.jwt_verify(f"{header_512}.{p}.{s}") is None
 
 
+def test_auth_config_dir_isolated_from_repo_tree(isolated_state_dir):
+    """回归：pytest 不得把凭据写进仓库工作树。
+
+    缺陷复现路径：`server.py` 在**导入时**就实例化 AuthStore，其 `_config_dir()`
+    默认指向 `<项目根>/config/`，于是跑一次 pytest 就会在工作树里留下
+    `config/auth.json` 与 `config/.auth_secret`。用户按 README 的
+    「装依赖 → 跑 pytest → 启动服务」操作时，服务读到测试生成的随机口令而跳过
+    `_create_default()`，`ADMIN_INITIAL_PASSWORD` 被**静默忽略**，任何口令都登录失败
+    （阻断级，且极难自查）。
+
+    conftest.py 通过 `ENERGY_CONFIG_DIR` 把认证/密钥落盘目录重定向到会话级临时目录，
+    本用例锁定该不变量。同源问题也适用于 `ENERGY_CACHE_SECRET_FILE`。
+    """
+    import os
+
+    resolved = os.path.abspath(auth_mod._config_dir())
+    project_config = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config"))
+
+    assert resolved == os.path.abspath(isolated_state_dir), (
+        f"认证配置目录解析为 {resolved}，未指向测试临时目录 {isolated_state_dir}")
+    assert resolved != project_config, \
+        "认证配置目录仍指向仓库 config/——测试会污染工作树并导致用户启动后无法登录"
+    assert os.path.abspath(os.environ["ENERGY_CONFIG_DIR"]) == resolved, \
+        "ENERGY_CONFIG_DIR 与实际解析结果不一致"
+
+
 def test_jwt_expired_rejected():
     token = auth_mod.jwt_encode({"sub": "tester"}, ttl_s=-1)
     assert auth_mod.jwt_verify(token) is None
