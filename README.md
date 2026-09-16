@@ -226,12 +226,32 @@ python backend/server.py
 
 两个脚本都会**优先使用项目内 `.venv`**，不存在时回退到 `PATH` 中的 `python`，不硬编码任何本机路径。
 
-### 首次登录
+### 登录与管理员口令
 
-系统所有 `/api/*` 接口（除登录与版本信息外）受 JWT 保护，需先登录：
+系统所有 `/api/*` 接口（除登录与版本信息外）受 JWT 保护，需先登录。管理员口令有两种管理方式，**按部署场景选一种**：
 
-- **方式一（推荐）**：启动前设置环境变量 `ADMIN_INITIAL_PASSWORD`，首启用它初始化管理员口令，首登后无需改密；
-- **方式二**：不设置时，首启会**生成随机强口令并仅在控制台打印一次**，请立即记录——若未读到控制台，删除 `config/auth.json` 后重启即可重新生成。
+| 模式 | 设 `ENERGY_AUTH_MODE` | 口令来源 | 适合场景 |
+|------|----------------------|---------|---------|
+| **persistent**（默认） | 留空 | 首启：`ADMIN_INITIAL_PASSWORD` → 无则生成随机口令；此后以 `config/auth.json` 为准 | 本机长期使用、单机部署 |
+| **env** | `env` | **始终**取 `ADMIN_INITIAL_PASSWORD`，不落盘 | 容器 / CI / 演示环境（改环境变量即生效，重装不用清文件） |
+
+**persistent 模式（默认）**：
+
+1. 启动前设 `ADMIN_INITIAL_PASSWORD` → 用它初始化，首登无需改密；
+2. 不设 → 首启生成随机强口令，**同时**打印到控制台并写入 `config/INITIAL_PASSWORD.txt`（0600 的一次性副本）。首登会强制改密，改密成功后该文件自动删除。
+
+**忘记口令**（不必手工找文件删除）：
+
+```bash
+python -m backend.manage show-state         # 只读：看认证模式、口令文件位置与状态
+python -m backend.manage reset-password     # 重置为新的随机强口令并打印
+python -m backend.manage reset-password --password '你的新口令'
+```
+
+> `ENERGY_AUTH_MODE=env` 时口令由环境变量托管，`reset-password` 会明确拒绝并提示改法
+> （应用内改密同样返回 400 并说明原因），不会出现"改了却不生效"的静默行为。
+
+**安全设计**：口令以 PBKDF2-HMAC-SHA256（200k 迭代）加盐哈希落盘；JWT 为 HS256、默认 12 小时过期，并绑定 User-Agent 指纹（**换浏览器或用 curl 复用浏览器 token 会 401 并提示"登录环境已变化"**——这是刻意设计，不是故障）；登录接口按 IP+账号限流，连续失败指数退避。未登录访问受保护端点返回 401。
 
 登录后进入看板，点击**「开始求解」**触发完整调度流程（含 MILP 求解，本机实测 **26 ~ 43 秒**，随当日规模与机器性能变化；结果会落盘缓存，再次访问秒开）。
 
@@ -315,7 +335,8 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `ENERGY_HOST` | `127.0.0.1` | 服务监听地址；公网部署改 `0.0.0.0` 并置于反向代理之后 |
 | `ENERGY_PORT` | `8800` | 服务端口 |
 | `ENERGY_LOG_LEVEL` | `info` | uvicorn 日志级别 |
-| `ADMIN_INITIAL_PASSWORD` | 空 | 首启管理员口令；留空则生成随机口令并打印到控制台 |
+| `ADMIN_INITIAL_PASSWORD` | 空 | 管理员口令。**persistent 模式**下仅用于首次创建；**env 模式**下每次启动都生效 |
+| `ENERGY_AUTH_MODE` | `persistent` | 认证模式：`persistent`（口令哈希落盘）/ `env`（口令仅来自环境变量，不落盘）。非法值回退 `persistent` |
 | `ENERGY_CACHE_SECRET_FILE` | `config/.cache_secret` | 缓存 HMAC 签名密钥路径 |
 | `ENERGY_CONFIG_DIR` | `config/` | **认证与密钥落盘目录**（`auth.json` / `.auth_secret` / `.api_secret`）。测试与只读部署用它把可变状态移出代码目录；pytest 会自动指向临时目录 |
 | `LLM_TEST_ALLOW_HOSTS` | 空 | SSRF 白名单逃生口，仅自建 LLM 网关时需要 |
@@ -328,7 +349,8 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 energy-dispatch-proj/
 ├── backend/
 │   ├── server.py                   # FastAPI 后端 + Web 静态服务（含 JWT 认证中间件）
-│   └── auth.py                     # 安全模块：JWT / Fernet / PBKDF2 口令存储
+│   ├── auth.py                     # 安全模块：JWT / Fernet / PBKDF2 口令存储
+│   └── manage.py                   # 运维命令：show-state / reset-password
 ├── web/                            # 原生 JS 前端（无构建步骤）
 │   ├── index.html
 │   ├── css/app.css
@@ -559,7 +581,8 @@ CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC
 | **上传数据后预测精度很差** | 历史数据不足 11 天会降级为朴素基线且不做物理修正，总览页会有降级告警。门槛由 `required_history_days()` 推算：滞后特征 7 天 + 测试集 3 天 + 训练下限 1 天 |
 | **DR 事件是从 `data/load/dr_signals.csv` 读的吗？** | **不是**。Web 流程按当前所选调度日**自动生成**两组默认 DR 事件（15:00–17:00 / 19:30–20:30），另支持页面手工触发与 `POST /api/dr/trigger`。`dr_signals.csv` 只是离线示例数据，其加载函数 `load_dr_signals()` 目前仅被测试引用，不在 Web 链路上——不要误以为改这个 CSV 能改变界面上的 DR 事件 |
 | **默认调度日是哪一天？** | 取可用日期列表的**中间日**（`dates[(len(dates)-1)//2]`）。内置 30 天数据集为 2024-07-01 ~ 07-30，故默认 **2024-07-15**；上传自有数据后默认日随之变化。该规则刻意不硬编码日期，避免内置数据换区间后默认日落在数据之外导致页面空白 |
-| **跑完 `pytest` 后启动服务，`ADMIN_INITIAL_PASSWORD` 不生效 / 任何口令都登录失败** | 早期版本会出现：测试把凭据写进了仓库 `config/`，服务读到测试生成的随机口令而跳过初始化。**现已修复**（测试状态隔离到临时目录，可用 `ENERGY_CONFIG_DIR` 覆盖）。若仍遇到，删除 `config/auth.json` 后重启，即会按 `ADMIN_INITIAL_PASSWORD` 重新初始化 |
+| **跑完 `pytest` 后启动服务，`ADMIN_INITIAL_PASSWORD` 不生效 / 任何口令都登录失败** | 早期版本会出现：测试把凭据写进了仓库 `config/`，服务读到测试生成的随机口令而跳过初始化。**现已修复**（测试状态隔离到临时目录，可用 `ENERGY_CONFIG_DIR` 覆盖）。若仍遇到：`python -m backend.manage show-state` 看现状，`python -m backend.manage reset-password` 直接重置——不必手工找文件删除 |
+| **想让 `ADMIN_INITIAL_PASSWORD` 每次启动都生效（容器里常见）** | 设 `ENERGY_AUTH_MODE=env`。默认的 `persistent` 模式只在首次创建时读取该变量，之后以 `config/auth.json` 为准——这是刻意的，否则你在界面上改过的口令会在下次重启时被环境变量覆盖回去 |
 
 ## 贡献指南
 

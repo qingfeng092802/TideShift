@@ -28,6 +28,43 @@ from cryptography.fernet import Fernet, InvalidToken
 _JWT_TTL_S = 12 * 3600
 _PBKDF2_ITERS = 200_000
 
+# 首启随机口令的**一次性落盘**文件名（位于配置目录）。首登改密成功后自动删除。
+# 存在的意义：原实现只在控制台打印一次随机口令，容器里日志被刷掉或用户漏看就再也拿不到，
+# 唯一恢复手段是手动删 auth.json——对开源使用者门槛过高。
+INITIAL_PWD_FILENAME = "INITIAL_PASSWORD.txt"
+
+# 认证模式（ENERGY_AUTH_MODE）：
+#   "persistent"（默认）——口令哈希落盘到 config/auth.json，文件是唯一真相；
+#                          ADMIN_INITIAL_PASSWORD 只在**首次创建**时读取
+#   "env"              ——口令只来自 ADMIN_INITIAL_PASSWORD，每次启动都以后者为准、不落盘；
+#                          适合容器 / CI / 演示环境（避免"改了环境变量却不生效"这类困惑）
+_AUTH_MODES = ("persistent", "env")
+
+
+class AuthModeError(RuntimeError):
+    """在 env 认证模式下尝试应用内改密等"与模式冲突"的操作。
+
+    单独定义一个异常类型，是为了让 API 层能给出**可执行**的提示
+    （"请改环境变量后重启"），而不是笼统的 500。
+    """
+
+
+def auth_mode() -> str:
+    """解析认证模式；非法值回退 persistent 并告警（不因配置写错而拒绝启动）。"""
+    raw = (os.environ.get("ENERGY_AUTH_MODE") or "").strip().lower()
+    if not raw:
+        return "persistent"
+    if raw not in _AUTH_MODES:
+        log.warning("ENERGY_AUTH_MODE=%r 不是合法取值（可选：%s），已回退 persistent",
+                    raw, " / ".join(_AUTH_MODES))
+        return "persistent"
+    return raw
+
+
+def env_password() -> str:
+    """环境变量提供的管理员口令（两种模式共用同一变量名，避免文档分裂）。"""
+    return (os.environ.get("ADMIN_INITIAL_PASSWORD") or "").strip()
+
 
 def _atomic_write(path: str, data: bytes):
     d = os.path.dirname(path)
@@ -41,6 +78,24 @@ def _atomic_write(path: str, data: bytes):
         os.chmod(path, 0o600)
     except OSError:
         pass  # Windows 下 0600 语义受限，尽力而为
+
+
+def _write_initial_pwd_file(path: str, password: str):
+    """把首启随机口令写成一次性文件（0600）。
+
+    原实现只在控制台打印一次：容器里日志被滚掉、或用户没盯住控制台，就再也拿不到口令，
+    唯一出路是手动删 auth.json —— 对开源使用者门槛过高。落一份 0600 的副本即可解决，
+    代价是口令短暂存在于磁盘上，因此首登改密成功后立即删除（见 _remove_initial_pwd_file）。
+    """
+    body = (
+        "汐储 TideShift · 一次性初始口令\n"
+        "================================\n"
+        f"用户名：admin\n"
+        f"初始口令：{password}\n\n"
+        "登录后系统会要求你设置新口令；改密成功后本文件会被自动删除。\n"
+        "若需重新生成：python -m backend.manage reset-password\n"
+    )
+    _atomic_write(path, body.encode("utf-8"))
 
 
 def _load_or_create_secret(path: str) -> bytes:
@@ -195,9 +250,45 @@ def _hash_password(pwd: str, salt: bytes) -> str:
 class AuthStore:
     """config/auth.json：{username, salt, hash, must_change}"""
 
-    def __init__(self):
+    def __init__(self, auto_create: bool = True):
+        """auto_create=False 时不因"文件缺失"而生成默认口令。
+
+        用途：运维命令（重置口令 / 离线巡检）不该在过程中顺手造出一份随机口令——
+        那会在控制台打印一个"看起来也像口令"的值，与真正的重置结果混淆。
+        """
+        self.mode = auth_mode()
         self.path = os.path.join(_config_dir(), "auth.json")
-        self._state = self._load()
+        if self.mode == "env":
+            self._state = self._load_env()
+        elif not auto_create and not os.path.exists(self.path):
+            # 无文件且不自动创建：给一份空壳，交由调用方显式 set_password 落盘
+            self._state = {"username": "admin", "salt": "", "hash": "", "must_change": False}
+        else:
+            self._state = self._load()
+
+    # ---------- env 模式 ----------
+    def _load_env(self) -> dict:
+        """env 模式：口令只来自环境变量，**不读也不写**任何口令文件。
+
+        这样"改环境变量却不生效"这类困惑在结构上不可能发生——环境变量就是唯一真相。
+        """
+        if not env_password():
+            log.error("ENERGY_AUTH_MODE=env 但 ADMIN_INITIAL_PASSWORD 为空——"
+                      "将无法登录。请设置该环境变量后重启（或改回 ENERGY_AUTH_MODE=persistent）。")
+        else:
+            log.info("认证模式：env（口令由 ADMIN_INITIAL_PASSWORD 管理，不落盘）")
+        # salt/hash 留空：verify() 在 env 模式下不走哈希比对分支
+        return {"username": "admin", "salt": "", "hash": "", "must_change": False}
+
+    @property
+    def password_managed_by_env(self) -> bool:
+        """口令是否由环境变量托管（此时应用内改密无意义）。"""
+        return self.mode == "env"
+
+    @property
+    def initial_pwd_file(self) -> str:
+        """首启随机口令的一次性落盘路径（persistent 模式才有意义）。"""
+        return os.path.join(_config_dir(), INITIAL_PWD_FILENAME)
 
     def _load(self) -> dict:
         if os.path.exists(self.path):
@@ -222,26 +313,33 @@ class AuthStore:
     def _create_default(self) -> dict:
         """🔴#3 修复：首启生成随机强口令（或读 ADMIN_INITIAL_PASSWORD），不再使用 admin/admin123。
 
-        随机口令仅在控制台一次性打印，未读控制台则需删除 config/auth.json 重新生成。
+        开源可用性补强：随机口令除了打印到控制台，还会以 0600 写入
+        `<配置目录>/INITIAL_PASSWORD.txt`——控制台日志被刷掉/容器里看不到时仍能取到口令；
+        首登改密成功后该文件自动删除（一次性凭据不长期留在磁盘）。
         must_change=true 同时由 server.py 中间件强制拦截。
         """
         salt = secrets.token_bytes(16)
-        env_pwd = os.getenv("ADMIN_INITIAL_PASSWORD", "")
+        env_pwd = env_password()
         initial_pwd = env_pwd if env_pwd else secrets.token_urlsafe(10)  # ~64bit 熵
         d = {"username": "admin", "salt": salt.hex(),
              "hash": _hash_password(initial_pwd, salt), "must_change": not bool(env_pwd)}
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
+        # 用 _atomic_write 落盘：它同时把权限收敛到 0600（此前这里用普通 open()，
+        # 首启生成的 auth.json 权限不受限，与后续 _save() 的 0600 不一致）
+        _atomic_write(self.path, json.dumps(d, ensure_ascii=False, indent=2).encode())
         log.info("=" * 60)
         if env_pwd:
             log.warning("⚠️  已使用环境变量 ADMIN_INITIAL_PASSWORD 初始化管理员口令，"
-                  "首次登录后请立即修改")
-
+                        "首次登录后请立即修改")
+            log.info("    提示：若希望环境变量**每次启动都生效**（容器/CI 场景），"
+                     "设 ENERGY_AUTH_MODE=env")
         else:
-            log.warning("⚠️  首次启动：已生成随机管理员口令（请立即记录并登录修改）：")
-            log.info(f"    用户名: admin    初始口令: {initial_pwd}")
-        log.info(f"    口令文件：config/auth.json（PBKDF2-SHA256, {_PBKDF2_ITERS} 迭代）")
+            log.warning("⚠️  首次启动：已生成随机管理员口令（请立即登录并修改）：")
+            log.info("    用户名: admin    初始口令: %s", initial_pwd)
+            _write_initial_pwd_file(self.initial_pwd_file, initial_pwd)
+            log.info("    口令副本（一次性，改密成功后自动删除）：%s", self.initial_pwd_file)
+        log.info("    口令文件：%s（PBKDF2-SHA256, %d 迭代）", self.path, _PBKDF2_ITERS)
+        log.info("    忘记口令：python -m backend.manage reset-password")
         log.info("=" * 60)
         return d
 
@@ -262,18 +360,45 @@ class AuthStore:
         （实测 compare_digest('管理员','admin') → TypeError），中文用户名登录会 500。
         encode 后按字节比较，任何输入一律返回 False 而非抛异常。
         """
-        salt = bytes.fromhex(self._state.get("salt", ""))
         try:
             user_ok = hmac.compare_digest((username or "").encode("utf-8"),
                                           self.username.encode("utf-8"))
+        except (TypeError, ValueError):
+            return False
+        if not user_ok:
+            return False
+        if self.password_managed_by_env:
+            # env 模式：与环境变量直接比对（无落盘哈希可比）
+            try:
+                return hmac.compare_digest((password or "").encode("utf-8"),
+                                           env_password().encode("utf-8"))
+            except (TypeError, ValueError):
+                return False
+        salt = bytes.fromhex(self._state.get("salt", ""))
+        try:
             hash_ok = hmac.compare_digest(_hash_password(password or "", salt).encode("ascii"),
                                           str(self._state.get("hash", "")).encode("ascii"))
         except (TypeError, ValueError):
             return False
-        return user_ok and hash_ok
+        return hash_ok
+
+    def _remove_initial_pwd_file(self):
+        """首启随机口令是一次性凭据：改密成功后立即删除，避免长期留在磁盘上。"""
+        try:
+            if self.initial_pwd_file and os.path.exists(self.initial_pwd_file):
+                os.remove(self.initial_pwd_file)
+                log.info("已删除一次性初始口令文件：%s", self.initial_pwd_file)
+        except OSError as e:
+            log.warning("删除一次性初始口令文件失败（请手动删除 %s）：%s",
+                        self.initial_pwd_file, e)
 
     def set_password(self, new_password: str):
+        if self.password_managed_by_env:
+            raise AuthModeError(
+                "当前为 env 认证模式：口令由环境变量 ADMIN_INITIAL_PASSWORD 管理，"
+                "应用内改密不会生效。请修改该环境变量后重启服务。")
         salt = secrets.token_bytes(16)
         self._state.update({"salt": salt.hex(), "hash": _hash_password(new_password, salt),
                             "must_change": False})
         self._save()
+        self._remove_initial_pwd_file()

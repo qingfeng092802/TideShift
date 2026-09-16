@@ -36,6 +36,9 @@ _TEST_STATE_DIR = tempfile.mkdtemp(prefix="tideshift-test-state-")
 os.environ["ENERGY_CONFIG_DIR"] = _TEST_STATE_DIR
 os.environ.setdefault("ENERGY_CACHE_SECRET_FILE",
                       os.path.join(_TEST_STATE_DIR, ".cache_secret"))
+# 固定认证模式为 persistent：认证相关用例都按"口令落盘"路径编写，
+# 若外部环境设了 ENERGY_AUTH_MODE=env，会让这些用例的表现随环境漂移。
+os.environ["ENERGY_AUTH_MODE"] = "persistent"
 
 
 @pytest.fixture(scope="session", autouse=True)

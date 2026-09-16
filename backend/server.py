@@ -1628,7 +1628,11 @@ def auth_change_password(req: ChangePwdReq):
         raise HTTPException(400, "原口令错误")
     if len(req.new_password) < 8:
         raise HTTPException(400, "新口令至少 8 位")
-    AUTH.set_password(req.new_password)
+    try:
+        AUTH.set_password(req.new_password)
+    except auth_mod.AuthModeError as e:
+        # env 模式下口令由环境变量托管，应用内改密无意义——给出可执行的改法而不是 500
+        raise HTTPException(400, str(e))
     return {"ok": True, "msg": "口令已更新，请使用新口令重新登录"}
 
 

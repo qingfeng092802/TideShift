@@ -66,6 +66,91 @@ def test_auth_config_dir_isolated_from_repo_tree(isolated_state_dir):
         "ENERGY_CONFIG_DIR 与实际解析结果不一致"
 
 
+# ---------- 认证模式（ENERGY_AUTH_MODE）与首启口令可用性 ----------
+
+def test_auth_mode_parsing(monkeypatch):
+    """模式解析：未设/空串/非法值一律回退 persistent（不因配置写错拒绝启动）。"""
+    monkeypatch.delenv("ENERGY_AUTH_MODE", raising=False)
+    assert auth_mod.auth_mode() == "persistent"
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "   ")
+    assert auth_mod.auth_mode() == "persistent"
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "env")
+    assert auth_mod.auth_mode() == "env"
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "never")
+    assert auth_mod.auth_mode() == "persistent"
+
+
+def test_env_mode_does_not_touch_disk(tmp_path, monkeypatch):
+    """env 模式：口令只来自环境变量，不读也不写任何口令文件。"""
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "env")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "env-managed-pass-1")
+
+    st = auth_mod.AuthStore()
+    assert st.password_managed_by_env is True
+    assert st.must_change() is False
+    assert st.verify("admin", "env-managed-pass-1") is True
+    assert st.verify("admin", "wrong") is False
+    assert st.verify("root", "env-managed-pass-1") is False
+    assert not (tmp_path / "auth.json").exists(), "env 模式不应落盘口令文件"
+    with pytest.raises(auth_mod.AuthModeError):
+        st.set_password("whatever-12345")
+
+
+def test_persistent_random_boot_writes_one_time_password_file(tmp_path, monkeypatch):
+    """首启随机口令要落一份 0600 的一次性副本，改密成功后自动删除。
+
+    原实现只在控制台打印一次：容器日志被刷掉或用户漏看就再也拿不到口令。
+    """
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "persistent")
+    monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
+
+    st = auth_mod.AuthStore()
+    f = tmp_path / auth_mod.INITIAL_PWD_FILENAME
+    assert f.exists(), "首启随机口令应写出一次性口令文件"
+    lines = [l for l in f.read_text(encoding="utf-8").splitlines() if l.startswith("初始口令：")]
+    assert lines, "一次性口令文件应包含口令行"
+    pwd = lines[0].split("：", 1)[1].strip()
+    assert len(pwd) >= 12
+    assert st.verify("admin", pwd) is True
+    assert st.must_change() is True
+
+    st.set_password("Brand-New-Pass-1")
+    assert not f.exists(), "改密成功后一次性口令文件应被删除"
+    assert st.verify("admin", "Brand-New-Pass-1") is True
+    assert st.verify("admin", pwd) is False
+
+
+def test_env_supplied_initial_password_writes_no_one_time_file(tmp_path, monkeypatch):
+    """环境变量指定口令时不应生成一次性口令文件，也不必强制改密。"""
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "persistent")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "from-env-pass-1234")
+
+    st = auth_mod.AuthStore()
+    assert not (tmp_path / auth_mod.INITIAL_PWD_FILENAME).exists()
+    assert st.must_change() is False
+    assert st.verify("admin", "from-env-pass-1234") is True
+
+
+def test_authstore_auto_create_false_does_not_mint_password(tmp_path, monkeypatch):
+    """auto_create=False：口令文件缺失时不顺手造一份随机口令。
+
+    运维命令（重置口令）依赖该行为——否则控制台会先后出现两个口令，使用者无从分辨。
+    """
+    monkeypatch.setattr(auth_mod, "_config_dir", lambda: str(tmp_path))
+    monkeypatch.setenv("ENERGY_AUTH_MODE", "persistent")
+    monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
+
+    st = auth_mod.AuthStore(auto_create=False)
+    assert not (tmp_path / "auth.json").exists(), "auto_create=False 不应落盘"
+    assert not (tmp_path / auth_mod.INITIAL_PWD_FILENAME).exists()
+    st.set_password("Explicit-Set-1234")
+    assert (tmp_path / "auth.json").exists()
+    assert st.verify("admin", "Explicit-Set-1234") is True
+
+
 def test_jwt_expired_rejected():
     token = auth_mod.jwt_encode({"sub": "tester"}, ttl_s=-1)
     assert auth_mod.jwt_verify(token) is None
