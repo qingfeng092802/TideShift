@@ -1474,8 +1474,11 @@ def explain():
                        selected_date=_sess().selected_date, engine=_sess().engine,
                        schedule=_sess().viz.get("final_schedule") if isinstance(_sess().viz, dict) else None,
                        llm_api_key=key, llm_base_url=base, llm_model=model)
-    out = SchedulingTools(ctx).explain_day()
-    return {"text": out}
+    tools = SchedulingTools(ctx)
+    out = tools.explain_day()
+    # 透传来源（"llm" | "rule" | "none"）：调用方据此在界面上标注本次解释是
+    # LLM 生成还是规则模板降级，无需解析正文前缀。
+    return {"text": out, "source": tools.last_explain_source}
 
 
 # ---------------- 对话 ----------------
@@ -1508,7 +1511,8 @@ def chat(req: ChatReq):
     if ctx.report is not None and ctx.report is not s.report:
         with s.lock:
             s.coordinator, s.report, s.baseline, s.viz = ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data
-    return {"reply": response, "history": s.chat_history[-16:]}
+    return {"reply": response, "history": s.chat_history[-16:],
+            "mode": getattr(agent, "mode", "unknown")}
 
 
 @app.post("/api/chat/stream")
@@ -1563,7 +1567,8 @@ async def chat_stream(req: ChatReq):
             with s.lock:
                 s.coordinator, s.report, s.baseline, s.viz = (
                     ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data)
-        yield _sse({"done": True, "history": s.chat_history[-16:]})
+        yield _sse({"done": True, "history": s.chat_history[-16:],
+                    "mode": getattr(agent, "mode", "unknown")})
 
     return StreamingResponse(
         gen(), media_type="text/event-stream",

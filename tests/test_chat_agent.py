@@ -88,5 +88,37 @@ def test_tool_numbers_match_report(tools):
         f"工具输出里找不到与报表一致的净收益 {report.net_revenue_yuan}"
 
 
+# ---------- F2：来源 / 模式必须是机器可读字段（供 API 层透传） ----------
+
+def test_agent_factory_sets_mode_flag(tools):
+    """create_agent 返回的 Agent 必须带 mode 标识，调用方不必 isinstance 猜。"""
+    t, _ = tools
+    rule_agent = create_agent(t.ctx, api_key="")
+    assert rule_agent.mode == "rule"
+
+    pytest.importorskip("langchain_openai")
+    from src.agents.chat_agent import LLMAgent
+    # 构造不发起网络请求（仅建图），用假 Key 只为验证模式标识
+    llm_agent = LLMAgent(t, api_key="sk-not-a-real-key", base_url=None, model="gpt-4o-mini")
+    assert llm_agent.mode == "llm"
+
+
+def test_explain_day_records_source_rule(tools):
+    """有调度结果且未配置 Key → 走规则模板，来源必须落成 "rule"（不是 "none"）。"""
+    t, _ = tools
+    out = t.explain_day()
+    assert isinstance(out, str) and len(out.strip()) > 0
+    assert t.last_explain_source == "rule", t.last_explain_source
+    # 正文前缀与来源字段必须一致，不能各说各话
+    assert "规则模板解释" in out
+
+
+def test_explain_day_source_none_without_schedule():
+    """无调度结果时来源为 "none"，且不抛异常。"""
+    t = SchedulingTools(AgentContext())
+    assert t.explain_day() == "请先运行调度。"
+    assert t.last_explain_source == "none"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

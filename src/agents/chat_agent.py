@@ -64,6 +64,10 @@ class SchedulingTools:
     def __init__(self, ctx: AgentContext):
         self.ctx = ctx
         self._explainer_cache = None
+        # 最近一次整日解释的来源："llm" | "rule" | "none"。
+        # explain_day() 只返回正文文本，来源信息会在此处留痕，供 API 层透传
+        # （否则调用方只能靠解析文本前缀判断走没走 LLM）。
+        self.last_explain_source: str = "none"
 
     # ---------- v1.2：LLM 决策解释层 ----------
     def _explainer(self):
@@ -111,11 +115,17 @@ class SchedulingTools:
         )
 
     def explain_day(self, question: str = "") -> str:
-        """生成今日调度决策的完整解释（LLM 优先，无 Key 降级规则模板）"""
+        """生成今日调度决策的完整解释（LLM 优先，无 Key 降级规则模板）
+
+        副作用：把本次解释的来源写入 ``self.last_explain_source``，
+        取值 "llm" | "rule"；无调度结果时为 "none"。
+        """
         digest = self._digest()
         if digest is None:
+            self.last_explain_source = "none"
             return "请先运行调度。"
         res = self._explainer().explain(digest, question or None)
+        self.last_explain_source = res.source
         tag = "🤖 LLM 决策解释" if res.used_llm else "📋 规则模板解释（未配置 API Key）"
         head = f"{tag}\n\n"
         if res.error:
@@ -306,6 +316,9 @@ class SchedulingTools:
 class RuleBasedAgent:
     """基于关键词匹配的对话Agent，保证无API Key时也能演示"""
 
+    # 供 API 层透传的模式标识（"rule" | "llm"），避免调用方用 isinstance 猜
+    mode = "rule"
+
     def __init__(self, tools: SchedulingTools):
         self.tools = tools
 
@@ -400,6 +413,9 @@ def chunk_text(chunk) -> str:
 
 class LLMAgent:
     """基于LangChain的LLM Agent，支持工具调用"""
+
+    # 供 API 层透传的模式标识（"rule" | "llm"）
+    mode = "llm"
 
     def __init__(self, tools: SchedulingTools, api_key: str, base_url: str = None, model: str = "gpt-4o-mini"):
         from langchain_openai import ChatOpenAI

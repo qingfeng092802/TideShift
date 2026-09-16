@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-92%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-97%20passed-brightgreen)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
 
 </div>
@@ -300,8 +300,8 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `POST` | `/api/dr/trigger` | 手工触发 DR 事件 |
 | `POST` | `/api/params` · `/api/settings/save` · `/api/settings/reset` | 参数与设置读写 |
 | `GET` / `POST` | `/api/providers` · `/api/providers/save` · `/api/providers/test` | LLM 供应商配置与连通性测试 |
-| `POST` | `/api/explain` | 单独生成决策解释 |
-| `POST` | `/api/chat` · `/api/chat/stream` · `/api/chat/clear` | 对话 Agent（含 SSE 流式） |
+| `POST` | `/api/explain` | 单独生成决策解释，返回 `{text, source}`；`source` 为 `llm` / `rule` / `none` |
+| `POST` | `/api/chat` · `/api/chat/stream` · `/api/chat/clear` | 对话 Agent（含 SSE 流式），返回 `{reply, history, mode}`；`mode` 为 `rule` / `llm` |
 | `GET` | `/api/chat/history` | 对话历史 |
 
 ## 配置项
@@ -518,7 +518,12 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **92 项**（快测 70 项 + `slow` 22 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+测试规模 **97 项**（快测 75 项 + `slow` 22 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、nightly 全量跑。
+
+> 若 `tests/test_server_api.py` 在某个受限环境里首个用例就失败并报
+> `PermissionError: [WinError 10013]`：那是 `TestClient` 依赖 loopback `socketpair()` 被沙箱拦截，
+> 属环境约束而非项目缺陷。判据是单独运行该文件应当通过（`pytest tests/test_server_api.py -q`）；
+> CI 运行在 `ubuntu-latest`，不受此限。
 
 CI 状态徽章未放入本 README：动态徽章需要真实的仓库路径（`OWNER/REPO`），而仓库尚未建立。
 `.github/workflows/ci.yml` 已就位，首次推送后按 GitHub 提示复制徽章 Markdown 即可启用。

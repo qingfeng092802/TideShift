@@ -82,10 +82,40 @@
 
 - **🟡 公网部署提示与数据来源声明不够显眼**：已提升为顶部两段独立提示块。
 
+### 修复（Fixed）· 第三方测试报告（F2）
+
+外部测试报告（2026-09-16，Windows / 隔离 venv / `requirements.lock`）结论为「可发版」，
+P0/P1 无项；其中 P3 项 F2 已在本轮修复：
+
+- **🟠 解释层与对话 Agent 未返回机器可读的来源标识**
+  `/api/explain` 只返回 `{"text": ...}`，`/api/chat` 只返回 `{"reply", "history"}`——
+  来源信息仅编码在正文前缀（`🤖 LLM 决策解释` / `📋 规则模板解释`）里，调用方只能靠字符串
+  匹配判断走没走 LLM。前端因此存在**可见缺陷**：点「生成 / 刷新解释」后只替换正文，
+  标题里的来源标签停留在旧值（例如解释已生成完，标签仍显示「⚪ 未生成」）。
+  修复：
+  1. `SchedulingTools` 新增 `last_explain_source`（`"llm" | "rule" | "none"`），
+     `explain_day()` 写入来源；
+  2. `RuleBasedAgent.mode = "rule"`、`LLMAgent.mode = "llm"`，由 `create_agent` 工厂产出；
+  3. `/api/explain` 返回 `source`；`/api/chat` 与 `/api/chat/stream` 的收尾事件返回 `mode`；
+  4. 前端 `aiExpander` 抽出 `aiExpanderHeadInner()` 单一来源标签实现，刷新解释时同步
+     更新标题标签与展开态（用 `innerHTML` 替换按钮内容而非 `outerHTML`，避免丢事件监听）；
+  5. 新增 5 项测试：规则/LLM 模式标识、`last_explain_source` 的 `rule` 与 `none` 两条路径、
+     两个端点的响应契约（含 `source` / `mode` 字段存在性）。
+
+- **🟡 测试文件内的失效登录 Helper（顺带修复）**
+  `tests/test_server_api.py` 的 `_login()` 默认 `username="tester"`，但 `AuthStore` 只维护
+  单账户（`admin`，且用 `hmac.compare_digest` 全等比较），该默认值必定返回 401。
+  已把默认值改为 `server.AUTH.username`，并新增 `_auth_headers()` 便捷函数；
+  新增用例实际调用过该路径后才发现此问题。
+
 ### 验证（Verified）
 
-- `pytest` 快测 **70 项通过**、全量（含 slow）**92 项通过**（Python 3.13.14 + `requirements.lock`）。
-- `git add -A` 后纳入版本控制 **67 个文件**；`config/`、`.env`、`logs/`、`.solve_cache/`
+- `pytest` 快测 **75 项通过**、全量（含 slow）**97 项通过**（Python 3.13.14 + `requirements.lock`；
+  本轮新增 5 项测试，测试总数由 70/92 增至 75/97，README 徽章与测试章节已同步）。
+- F2 修复经**真实 uvicorn 端到端**复验：`POST /api/explain` → 字段 `['source','text']`、
+  `source='rule'`；`POST /api/chat` → 字段 `['history','mode','reply']`、`mode='rule'`。
+- `node --check web/js/pages.js` 语法校验通过（前端改动无语法错误）。
+- `git add -A` 后纳入版本控制 **77 个文件**；`config/`、`.env`、`logs/`、`.solve_cache/`
   经 `git check-ignore` 确认均被正确排除。
 - 后端启动冒烟：`/api/system-info` 返回版本 `2.4.4-fix30`；未带 token 访问
   `/api/page/dashboard` 返回 401（认证门生效）；首启经 `ADMIN_INITIAL_PASSWORD` 登录返回 200；
@@ -93,6 +123,8 @@
 - `pip install --dry-run --report` 实测：`requirements.txt` 与 `requirements.lock` 均可解析，
   无依赖冲突；收口后直接依赖不跨次版本跳变。
 - 截图由 Playwright 驱动真实 UI 生成（登录 → 自动求解 → 逐页截图），未改动任何前端代码。
+- 缓存命中时 `/api/progress` 返回 `{"running":false,...,"solved":true}`（布尔字段，
+  JSON 紧凑格式无空格）——作为「求解已完成」的判据时应按字段解析，不要做字符串匹配。
 
 ### 说明（Notes）
 
@@ -104,6 +136,13 @@
 - **版本号保持 `2.4.4-fix30`**：它是合法的 SemVer 预发布标识（优先级高于 `2.4.4`），且与历史
   `fix21~fix30` 命名连续。若将来改为 `2.4.4+fix30`，注意构建元数据不参与版本优先级比较，
   语义会弱于预发布标识。版本号三处（`src/__init__.py`、本文件、README 徽章）当前一致。
+
+- **已知环境依赖（非缺陷）**：`tests/test_server_api.py` 依赖 `TestClient`，其首次请求时
+  anyio 会在 Windows 上建立 loopback `socketpair()`。受限沙箱/安全软件若拦截 loopback 套接字，
+  会抛 `PermissionError: [WinError 10013]`，表现为该文件首个用例失败。判据：单文件运行应通过
+  （`pytest tests/test_server_api.py -q`）；CI 运行在 `ubuntu-latest`，不受影响。
+  本机（Python 3.13.14 / Windows 10）实测 `socketpair()`、anyio 阻塞门户、TestClient 均正常，
+  全量测试连续多次 100% 通过，未能复现该失败。该说明已同步写入测试文件夹具注释。
 
 ## [2.4.4-fix30] - 2026-09-14（交付审查问题闭环）
 

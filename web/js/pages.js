@@ -51,11 +51,20 @@ function bindOpBar(root, withExport) {  $("#op-date", root).addEventListener("ch
 }
 
 /* ---------- 共享：AI 决策解释（总览页） ---------- */
+const AI_SOURCE_LABEL = { llm: "🤖 LLM 生成", rule: "📋 规则模板", none: "⚪ 未生成" };
+function aiSourceLabel(source) {
+  return AI_SOURCE_LABEL[source] || source || "—";
+}
+/* head 内部内容单独成函数：刷新解释时只需替换 innerHTML，
+   保留 <button> 元素本身（其 click 监听器绑在元素上，替换 outerHTML 会丢失）。 */
+function aiExpanderHeadInner(source) {
+  return `🧠 AI 决策解释 · ${aiSourceLabel(source)}（点击展开查看）` +
+    `<span style="font-size:11px;color:var(--text-3);font-weight:400;">▼</span>`;
+}
 function aiExpanderHTML(exp) {
-  const label = { llm: "🤖 LLM 生成", rule: "📋 规则模板", none: "⚪ 未生成" }[exp.source] || exp.source;
   return `<div class="ai-expander${exp.source === "llm" ? " open" : ""}" id="ai-exp">
     <!-- P1-F2：head 为 <button>（键盘可达，原生 Enter/Space 触发）；此前是 div 仅绑 click，键盘用户无法操作 -->
-    <button type="button" class="head" aria-expanded="${exp.source === "llm"}">🧠 AI 决策解释 · ${label}（点击展开查看）<span style="font-size:11px;color:var(--text-3);font-weight:400;">▼</span></button>
+    <button type="button" class="head" aria-expanded="${exp.source === "llm"}">${aiExpanderHeadInner(exp.source)}</button>
     <div class="body">
       <div class="ai-text">${exp.text ? renderMarkdown(exp.text) : "调度图未生成解释（可能未启用解释层）。点击下方按钮即时生成。"}</div>
       <div style="margin-top:12px;display:flex;gap:10px;align-items:center;">
@@ -79,6 +88,13 @@ function bindAiExpander(root) {
     try {
       const r = await API.post("/api/explain");
       $(".ai-text", exp).textContent = r.text;
+      // 同步刷新标题来源标签：服务端返回 source（"llm" | "rule" | "none"）。
+      // 此前只替换正文，标签会停留在生成前的旧来源（如刚生成完仍显示「⚪ 未生成」）。
+      if (r.source) {
+        head.innerHTML = aiExpanderHeadInner(r.source);
+        head.setAttribute("aria-expanded", String(r.source === "llm"));
+        exp.classList.toggle("open", r.source === "llm");
+      }
       toast("决策解释已生成", "ok");
     } catch (err) { toast(`解释层异常：${err.message}`, "err"); }
     btn.disabled = false; btn.textContent = "🔄 生成 / 刷新解释";

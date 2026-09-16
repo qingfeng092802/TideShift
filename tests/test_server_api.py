@@ -23,12 +23,33 @@ from src.utils.url_guard import SSRFBlockedError, assert_safe_llm_url  # noqa: E
 def client():
     # 测试期固定口令（无条件重置，保证测试自洽且不依赖 config/auth.json 历史）
     server.AUTH.set_password("test-password-123")
+    # ⚠️ 环境依赖：TestClient 首次发请求时，anyio 会在调用线程与事件循环线程之间
+    # 建立「阻塞门户」，Windows 下依赖 loopback socketpair()。
+    # 若运行环境的沙箱/安全软件拦截 loopback 套接字，会抛
+    # PermissionError: [WinError 10013]，表现为本文件首个用例失败（非项目缺陷）。
+    # 判断方式：单独运行本文件应通过——pytest tests/test_server_api.py -q
+    # 本机（Python 3.13.14 / Windows 10）实测 socketpair 与 anyio 门户均正常。
+    # CI 运行在 ubuntu-latest，不受此限。
     return TestClient(server.app)
 
 
-def _login(client, username="tester", password="test-password-123"):
-    # 用 tester 账号：AuthStore 只支持单账户，这里直接对真实账户校验
-    return client.post("/api/auth/login", json={"username": username, "password": password})
+def _login(client, username=None, password="test-password-123"):
+    """以真实账户登录。
+
+    注意：AuthStore 只维护单账户，其用户名固定为 ``server.AUTH.username``（"admin"）。
+    此前本函数默认 username="tester"，而校验用的是 hmac.compare_digest 全等比较，
+    传 "tester" 必定 401——默认值改为真实用户名，避免调用方拿到 None token。
+    """
+    return client.post("/api/auth/login",
+                       json={"username": username or server.AUTH.username,
+                             "password": password})
+
+
+def _auth_headers(client) -> dict:
+    """登录并返回可直接用于 /api/* 的 Authorization 头。"""
+    r = _login(client)
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 def test_protected_endpoint_requires_auth(client):
@@ -97,3 +118,33 @@ def test_login_rate_limit(client):
         server._LOGIN_FAILS.pop(k, None)
     for k in [k for k in server._LOGIN_LOCKED_UNTIL if victim in k]:
         server._LOGIN_LOCKED_UNTIL.pop(k, None)
+
+
+def test_explain_response_exposes_source(client, monkeypatch):
+    """F2：/api/explain 必须在响应体里给出解释来源。
+
+    此前只返回 {"text": ...}，来源仅体现在正文前缀里，调用方无法可靠判断
+    本次解释是 LLM 生成还是规则模板降级（前端刷新后标签也停留在旧值）。
+
+    这里把 ensure_solved 短路，避免触发真实 MILP；本用例只校验响应契约。
+    """
+    monkeypatch.setattr(server, "ensure_solved", lambda: True)
+    hdr = _auth_headers(client)
+    r = client.post("/api/explain", headers=hdr)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "text" in body and isinstance(body["text"], str)
+    # 无调度数据 → "none"；有数据且无 Key → "rule"；配了 Key → "llm"
+    assert body.get("source") in ("llm", "rule", "none"), body
+
+
+def test_chat_response_exposes_mode(client, monkeypatch):
+    """F2：/api/chat 必须返回对话 Agent 的模式标识（rule / llm）。"""
+    monkeypatch.setattr(server, "ensure_solved", lambda: True)
+    hdr = _auth_headers(client)
+    r = client.post("/api/chat", headers=hdr, json={"message": "今天的收益是多少"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "reply" in body and "history" in body
+    # 无 API Key 时工厂必定返回规则模式 Agent
+    assert body.get("mode") in ("rule", "llm"), body
