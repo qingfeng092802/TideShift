@@ -37,6 +37,39 @@
 未达 1.0 的那一次漏网是已登记的实现边界（单位白名单不含"倍"），
 在 `tests/test_evals.py` 里以"断言漏网"的形式钉住，而非从用例里删掉。
 
+### 新增（Added）—— 2026-09-18 约束参数寻优 Agent
+
+- **`src/agents/parameter_search_agent.py`**：把"模型决定控制流"补进主链路。此前编排是
+  固定有向图（预测 → MILP → DR → 解释），LLM 只在末端写文案 —— 那是工作流不是智能体。
+  新模块跑 提案约束 → 真实 MILP 评价 → 独立复核 → 反思 → 再提案 的闭环，
+  模型可主动输出 stop 结束循环。
+- **`HeuristicProposer`（确定性坐标下降）**：无 Key 也能跑完整循环，更重要的是充当
+  **非智能基线** —— 没有对照物，"agent 有效"就没有内容。`LLMProposer` 在无 Key、
+  调用失败、JSON 不可解析、参数越界、提议安全策略项五种情况下逐步回退到它并计数。
+- **五条护栏**，每条都有测试：
+  ① 越过 55 ℃ 停机线的解可评价不可选中（`allow_unsafe_winner` 默认 False）；
+  ② 搜索跑 24/48 点、胜出者必须回到 96 点与默认同场复验（同一配置跨分辨率实测
+  1285.79 / 1279.09 / 1226.94 元，不可比）；复验入口对非 96 点直接抛错 ——
+  协调器按当日 CSV 取 96 点价格，改 `num_steps` 会让 MILP 只取前半天的数据，
+  静默解一个错问题还解得又快又"最优"；
+  ③ `include_thermal` / `enable_dr` 属安全与结算策略项，寻优提议即拒收
+  （粗分辨率把峰值温度低估约 12 ℃，搜索阶段看不见越温限后果）；
+  ④ 胜出门槛 2%：`mip_gap=1%` 下同配置重复求解实测抖动约 1%
+  （三次 1244.24 / 1255.87 / 1260.58 元），小于门槛的差异是求解器噪声；
+  ⑤ 允许 agent 输：复验未跑赢就如实写"未跑赢"并采用默认配置。
+- **`tests/test_parameter_search.py`（49 项）**：假目标函数是"已知参数的已知函数"，
+  于是"有没有找到更优"有唯一答案；可行性判据复用生产代码的 `_rejections`，
+  不在测试里另写一套规则。含 1 项 `slow` 真实 MILP 用例。
+- **修复判据缺陷 1 处**：`_status_infeasible` 不能用 `"feasible" in status` 判可行，
+  因为 PuLP 的 `Infeasible` 本身就含子串 `feasible` —— 会把不可行解放过去。
+  现按"已知不可行"名单判，并覆盖项目里全部真实状态串
+  （`Optimal` / `Infeasible` / `Not Solved` / `Stopped (time limit, feasible incumbent)` /
+  `Final_DR_Adjusted` / `Baseline`）。
+- **`docs/parameter-search-sample.md`**：一次真实运行的报告。结论是**启发式寻优未跑赢
+  默认约束**（降功率、收窄 SOC 窗口都让净收益下降），如实入库而非挑一次成功运行展示。
+- CLI 报告含 ✅/℃ 等字符，Windows 控制台默认 GBK 会 `UnicodeEncodeError` 直接跑挂；
+  `main()` 里把 stdout/stderr 重设为 UTF-8（开发与实测环境即 Windows 10）。
+
 ### 修复（Fixed）—— 由 evals/ 首轮评测暴露，均有回归用例
 
 - **P0：SOC 参数被截断，系统按错误约束跑真实 MILP**。
