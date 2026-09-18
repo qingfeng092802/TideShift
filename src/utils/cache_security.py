@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""缓存安全模块（P0-01/P0-10/P0-19/P0-47 综合加固）
+"""缓存安全模块：签名 / 密钥分离 / 受限反序列化 / 容量上限 / 生成互斥
 
-P0-01：缓存文件 HMAC-SHA256 签名，防篡改/投毒（pickle 反序列化 RCE 防线）。
-P0-10：签名密钥不再与密文同目录——密钥存 config/.cache_secret（可经
+缓存文件 HMAC-SHA256 签名，防篡改/投毒（pickle 反序列化 RCE 防线）。
+签名密钥不再与密文同目录——密钥存 config/.cache_secret（可经
        ENERGY_CACHE_SECRET_FILE 环境变量覆盖），.solve_cache/ 下的读权限
        拿不到密钥，伪造合法签名需要额外攻破 config/。
        同时 pickle.loads 换受限 Unpickler（模块白名单），删除任意类的反序列化原语。
-P0-19：enforce_disk_lru() 提供 mtime LRU 淘汰，防缓存目录无界膨胀。
-P0-47：密钥文件生成加互斥锁（O_EXCL 锁文件），防首启并发双写互相覆盖。
+enforce_disk_lru() 提供 mtime LRU 淘汰，防缓存目录无界膨胀。
+密钥文件生成加互斥锁（O_EXCL 锁文件），防首启并发双写互相覆盖。
 
 写入格式：b"HMAC1\\n" + hex签名 + b"\\n" + pickle 载荷
 读取时先验签（hmac.compare_digest 防时序攻击），验签失败一律按"缓存未命中"处理。
-server.py 与 app.py 双前端共用本模块。
 """
 import hashlib
 import hmac
@@ -48,7 +47,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
 
 
 def _secret_key_path(cache_dir: str) -> str:
-    """密钥文件路径：默认放 config/（与缓存密文分离，P0-10），可环境变量覆盖。"""
+    """密钥文件路径：默认放 config/（与缓存密文分离），可环境变量覆盖。"""
     override = os.getenv("ENERGY_CACHE_SECRET_FILE")
     if override:
         return override
@@ -59,7 +58,7 @@ def _secret_key_path(cache_dir: str) -> str:
 def _secret_key(cache_dir: str) -> bytes:
     """加载（或首次生成）缓存签名密钥。密钥不入库、不入 git（config/ 已排除）。
 
-    P0-47：O_EXCL 锁文件保证首启并发时只有一个线程/进程生成密钥，
+    O_EXCL 锁文件保证首启并发时只有一个线程/进程生成密钥，
     其余等待锁释放后读取，避免两份密钥互相 O_TRUNC 覆盖导致旧缓存全部失效。
     """
     global _KEY_CACHE
@@ -156,7 +155,7 @@ def load_signed(cache_dir: str, filename: str):
         expect = hmac.new(_secret_key(cache_dir), payload, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig.decode("ascii"), expect):
             return None  # 验签失败：缓存被篡改或密钥已更换
-        # P0-10：受限反序列化——白名单外的类直接判未命中，不再给任意类执行机会
+        # 受限反序列化——白名单外的类直接判未命中，不再给任意类执行机会
         import io as _io
         return _RestrictedUnpickler(_io.BytesIO(payload)).load()
     except Exception:
@@ -164,7 +163,7 @@ def load_signed(cache_dir: str, filename: str):
 
 
 def enforce_disk_lru(cache_dir: str, max_files: int = 50, max_total_mb: float = 1024.0) -> int:
-    """P0-19：按 mtime LRU 淘汰磁盘缓存，返回删除的文件数。
+    """按 mtime LRU 淘汰磁盘缓存，返回删除的文件数。
 
     缓存键含浮点参数组合，理论无穷多；不淘汰则反复调参可撑爆磁盘。
     """

@@ -26,7 +26,7 @@ from src.agents.demand_response_agent import DRSignal
 
 log = get_logger("chat_agent")
 
-# v1.1：LangGraph 是可选依赖。规则模式 / LLM 模式都不需要它，
+# LangGraph 是可选依赖。规则模式 / LLM 模式都不需要它，
 # 原来这里是硬导入，没装 langgraph 时连对话Agent都用不了。
 try:
     from src.agents.langgraph_coordinator import LangGraphCoordinator
@@ -46,7 +46,7 @@ class AgentContext:
     historical_data: Optional[pd.DataFrame] = None
     selected_date: str = ""
     engine: str = "LangGraph"
-    # v1.2：解释层用
+    # 解释层用
     schedule: Optional[ScheduleResult] = None   # 最终调度结果（有则优先，无则从viz_data重建）
     llm_api_key: str = ""
     llm_base_url: str = ""
@@ -69,7 +69,7 @@ class SchedulingTools:
         # （否则调用方只能靠解析文本前缀判断走没走 LLM）。
         self.last_explain_source: str = "none"
 
-    # ---------- v1.2：LLM 决策解释层 ----------
+    # ---------- LLM 决策解释层 ----------
     def _explainer(self):
         """惰性创建解释器（无 API Key 时它会自动降级到规则模板）"""
         if self._explainer_cache is None:
@@ -257,7 +257,7 @@ class SchedulingTools:
         if self.ctx.historical_data is None:
             return "缺少历史数据。"
 
-        # P0-04：参数打包为配置快照注入，不再改动全局 CONFIG
+        # 参数打包为配置快照注入，不再改动全局 CONFIG
         from dataclasses import replace as _dc_replace
         _bat = active_config().battery
         if soc_min is not None:
@@ -406,7 +406,7 @@ class RuleBasedAgent:
             hour = int(hour_match.group(1))
             return self.tools.explain_schedule(hour)
 
-        # v1.2：整日决策解释（LLM 优先，无 Key 自动降级规则模板）
+        # 整日决策解释（LLM 优先，无 Key 自动降级规则模板）
         if any(k in text for k in ["解释", "为什么", "为啥", "分析", "总结", "解读", "决策",
                                    "怎么安排的", "思路", "策略", "安排", "风险", "注意"]):
             return self.tools.explain_day(user_input)
@@ -472,7 +472,7 @@ class LLMAgent:
     def __init__(self, tools: SchedulingTools, api_key: str, base_url: str = None, model: str = "gpt-4o-mini"):
         from langchain_openai import ChatOpenAI
         from langchain_core.tools import tool
-        # 🔴fix22：langchain 1.x 移除了 create_tool_calling_agent/AgentExecutor，
+        # langchain 1.x 移除了 create_tool_calling_agent/AgentExecutor，
         # 迁移到 v1 新 API create_agent（LangGraph 内核）。
         from langchain.agents import create_agent
 
@@ -621,7 +621,7 @@ def create_agent(
     model: str = "gpt-4o-mini",
 ) -> object:
     """创建Agent，有API Key用LLM模式，否则用规则模式"""
-    # v1.2：把 LLM 配置同步到上下文，供解释层使用（工具解释与整日解释共用同一套凭据）
+    # 把 LLM 配置同步到上下文，供解释层使用（工具解释与整日解释共用同一套凭据）
     ctx.llm_api_key = api_key or ""
     ctx.llm_base_url = base_url or ""
     ctx.llm_model = model or ""
@@ -630,7 +630,7 @@ def create_agent(
         try:
             return LLMAgent(tools, api_key, base_url or None, model)
         except ImportError as e:
-            # 🔴fix22 修复：此前 except Exception 静默回退规则模式——langchain-openai 未装时
+            # 此前 except Exception 静默回退规则模式——langchain-openai 未装时
             # 用户配好 Key 也永远出不了 LLM 回复，且无任何提示。现在至少留下可查的日志。
             log.warning("langchain-openai 未安装或导入失败（%s），对话回退规则模式。"
                         "修复：pip install langchain-openai", e)

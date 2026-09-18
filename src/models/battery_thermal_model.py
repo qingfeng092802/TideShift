@@ -154,7 +154,7 @@ class BatteryThermalModel:
 
         soc = initial_soc
         for i in range(n):
-            # 🟠#27 修复（off-by-one）：原实现 temps[i] 记录的是**步进前**温度、
+            # 原实现 temps[i] 记录的是**步进前**温度、
             # heat_gens[i] 是**上一步**残留产热（i=0 恒为 0），且末步 t=96 的温度
             # 从不进入统计 → 最高温漏检末点超温。现在：
             #   temps[i]  = 第 i 步起步温度（对应 power_profile_kw[i] 施加前的状态）
@@ -178,7 +178,7 @@ class BatteryThermalModel:
                 soc -= power_profile_kw[i] * 0.25 / (self.cfg.discharge_efficiency * self.cfg.rated_capacity_kwh)
             soc = np.clip(soc, 0, 1)
 
-        # 末步结束温度纳入统计（🟠#27：此前 t=96 温度不进 max，漏检末点超温）
+        # 末步结束温度纳入统计（此前 t=96 温度不进 max，漏检末点超温）
         final_temp = float(self.state.temperature_c)
         temps_ext = np.append(temps, final_temp)
         return {
@@ -216,7 +216,7 @@ def estimate_temperature_rise(power_kw: float, duration_hours: float,
     nominal_voltage = cfg.nominal_voltage_v
     current = abs(power_kw) * 1000 / nominal_voltage
     joule_heat = current ** 2 * cfg.internal_resistance_ohm
-    # 🟠#28 修复（符号不自洽）：原实现无条件 `+joule*coeff`，与 compute_heat_generation
+    # 原实现无条件 `+joule*coeff`，与 compute_heat_generation
     # （充电时反应热为 -0.5·coeff·joule）矛盾，充电场景高估热量约 1.5×coeff。
     # 现按功率符号区分：放电（>0）+coeff，充电（<0）-0.5·coeff，与 step() 同一套物理。
     if power_kw > 0:  # 放电：反应热为正

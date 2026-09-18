@@ -1,5 +1,5 @@
 """
-LLM 决策解释层测试（v1.2）
+LLM 决策解释层测试
 
 测试策略：
 - 全部用 mock 客户端，不联网、不需要 API Key
@@ -131,7 +131,7 @@ def test_digest_improvement_is_steady_state_vs_baseline():
 def test_improvement_excludes_dr_subsidy_to_keep_same_baseline():
     """
     基准策略不参与需求响应。若把 DR 补贴算进"本方案"再去比基准，
-    就会虚增提升幅度——这正是 v1.0 稻草人基准的同类错误，必须拦住。
+    就会虚增提升幅度——这正是 稻草人基准的同类错误，必须拦住。
     """
     report = _make_report(net_revenue=1245.30 + 460.0)   # 含 DR 补贴
     report.dr_subsidy_yuan = 460.0

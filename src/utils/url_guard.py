@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """LLM Base URL SSRF 防护（公共模块）
 
-P0-11 修复：此前 _assert_safe_llm_url 只存在于 backend/server.py，
-Streamlit 侧 app.py 的 _test_llm_connection 直连任意 URL 无防护。
-本模块下沉为 src/utils 公共实现，两个前端强制接入。
+存在理由：这个校验原先只长在 backend/server.py 里，另一条「测试连接」的
+路径直连用户填的任意 URL，等于一条现成的 SSRF 入口。
+下沉为 src/utils 公共实现后，所有调用方都必须过它。
 
 规则：
 - 仅允许 http/https 协议、常规端口（80/443）

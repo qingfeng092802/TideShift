@@ -76,7 +76,7 @@ class BatteryDegradationModel:
         if len(soc_trajectory) < 2:
             return DegradationResult(0, 0, 0, soc_trajectory, 0)
 
-        # 🟠#42：SOC 轨迹含 NaN 时行为未定义（比较恒 False → 衰减系数错取区间）。
+        # SOC 轨迹含 NaN 时行为未定义（比较恒 False → 衰减系数错取区间）。
         # 显式校验，坏数据早暴露。
         if not np.isfinite(soc_trajectory).all():
             raise ValueError("SOC 轨迹含 NaN/Inf，无法计算寿命衰减——请检查上游充放电功率曲线")
@@ -148,7 +148,7 @@ class BatteryDegradationModel:
                 energy_out = power * time_step_hours / self.cfg.discharge_efficiency
                 soc[i + 1] = soc[i] - energy_out / self.cfg.rated_capacity_kwh
 
-            # 限制在物理范围内（🟠#15：按配置的 soc_min/soc_max 裁剪而非 0~1，
+            # 限制在物理范围内（按配置的 soc_min/soc_max 裁剪而非 0~1，
             # 0~1 口径会把 soc_min=0.2 以下的越界也当"正常"，掩盖真实越界）
             soc[i + 1] = np.clip(soc[i + 1], self.cfg.soc_min, self.cfg.soc_max)
 
@@ -173,7 +173,7 @@ class BatteryDegradationModel:
         # 等效循环次数（取充放电的较大值）
         throughput = max(charge_energy_kwh, discharge_energy_kwh)
         dod = soc_range[1] - soc_range[0]  # 放电深度
-        # 🟠#42：soc_range 上下限相等时除零 → ZeroDivisionError/inf。显式拒绝非法区间。
+        # soc_range 上下限相等时除零 → ZeroDivisionError/inf。显式拒绝非法区间。
         if dod <= 1e-9:
             raise ValueError(f"soc_range 上下限相等（{soc_range}），DoD 为零无法折算等效循环")
         equivalent_cycles = throughput / (self.cfg.rated_capacity_kwh * dod)

@@ -42,7 +42,7 @@ function reflowCharts() {
   requestAnimationFrame(() => State.charts.forEach((c) => c.resize()));
 }
 
-/* P1-F4 修复：删除 priceBands 死代码——该函数硬编码 7 段电价时段且从未被任何图表
+/* 删除 priceBands 死代码——该函数硬编码 7 段电价时段且从未被任何图表
    调用，与 engineCfg().price_periods（/api/bootstrap 下发的单一事实来源）冲突；
    若未来需要电价底纹，应从 engineCfg().price_periods 动态生成 markArea。 */
 

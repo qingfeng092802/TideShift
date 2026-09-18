@@ -1,10 +1,10 @@
 """
-LLM 决策解释层（v1.2）
+LLM 决策解释层
 
 定位：把 MILP 求解 + 后验仿真产生的**硬数字**压缩成一份"事实摘要"(DecisionDigest)，
 再交给 LLM 生成人类可读的决策解释。LLM 只负责组织语言，不负责算数。
 
-为什么这么设计（面试可讲的三条）：
+为什么这么设计：
 
 1. **LLM 不碰计算**：优化结果由 MILP 给出，热/衰减由物理模型后验给出。
    LLM 拿到的只是已经算完的数字，从源头上杜绝"模型自己编一个收益"。
@@ -42,7 +42,7 @@ class LLMError(RuntimeError):
 
 
 # ========== 凭据解析 ==========
-# 🔴 修复：LangGraph 的 explanation_node 以 `LLMExplainer()` 无参构造，拿不到 Web 界面
+# LangGraph 的 explanation_node 以 `LLMExplainer()` 无参构造，拿不到 Web 界面
 # 配置的 provider 凭据，只能回退环境变量——而服务进程内并无该环境变量，导致调度内嵌的
 # 「LLM 决策解释」长期静默走规则模板（日志 source=rule），界面配好的 Key 只对对话 Agent
 # 生效。此处提供进程级默认凭据，由 backend/server.py 在加载/保存模型配置后注入。
@@ -316,7 +316,7 @@ def build_digest(
     baseline_net = float(getattr(baseline, "net_revenue_yuan", 0.0) or 0.0)
 
     # 同口径对比：基准策略不参与需求响应，
-    # 直接拿"含DR补贴的净收益"去比"不含DR的基准"会虚增收益（v1.0 稻草人基准的同类错误）。
+    # 直接拿"含DR补贴的净收益"去比"不含DR的基准"会虚增收益（稻草人基准的同类错误）。
     # 因此提升幅度一律按"套利收益 - 衰减成本"计算，DR 补贴单独列出。
     net_without_dr = float(report.arbitrage_revenue_yuan) - float(report.degradation_cost_yuan)
     b_arb = getattr(baseline, "arbitrage_revenue_yuan", None)

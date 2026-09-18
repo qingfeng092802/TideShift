@@ -64,7 +64,7 @@ class DailyReport:
     forecast_mape: float
     dr_events_count: int
     alerts: List[str]
-    # v1.2：LLM 决策解释层输出（给默认空值，保持向后兼容）
+    # LLM 决策解释层输出（给默认空值，保持向后兼容）
     explanation: str = ""
     explanation_source: str = "none"   # llm / rule / none
 
@@ -88,10 +88,10 @@ class DailyReport:
 class CoordinatorAgent:
     """调度协调Agent（纯 Python 编排）
 
-    🟡#32 说明：与 langgraph_coordinator.LangGraphCoordinator 是同一调度流水线的
+    说明：与 langgraph_coordinator.LangGraphCoordinator 是同一调度流水线的
     两套编排器（本类有状态、LangGraph 版无状态）。测试与「编排引擎=纯Python」
     选项仍依赖本类；新功能请优先加在 LangGraph 版并在本类保持接口对齐。
-    长期方向：合并为单一编排（见审查报告阶段3建议 #16）。
+    长期方向：两套编排合并为单一实现，当前先保持接口对齐以免行为漂移。
     """
 
     def __init__(self, config=None, xgb_params=None):
@@ -179,7 +179,7 @@ class CoordinatorAgent:
             forecast = self.load_agent.predict_simple(historical_data, date)
             self.state.forecast_result = forecast
             self.state.load_profile = forecast.forecast_load_kw
-            # 🟠 降级路径同样要落告警：此前异常分支不写 alerts，报表上看不出本轮
+            # 降级路径同样要落告警：此前异常分支不写 alerts，报表上看不出本轮
             # 用的不是 XGBoost 而是历史均值，MAPE 口径也就无从辨认。
             self.state.alerts.append(
                 f"负荷预测异常，已降级为历史均值预测（{type(e).__name__}）：{str(e)[:120]}")
@@ -356,7 +356,7 @@ class CoordinatorAgent:
         return generate_price_profile(time_idx)
 
     def get_visualization_data(self) -> Dict:
-        """获取可视化数据（供Streamlit使用）"""
+        """获取可视化数据（供 Web 看板渲染）"""
         if self.state.final_schedule is None:
             return {}
 
@@ -372,7 +372,7 @@ class CoordinatorAgent:
             "battery_temp": self.state.final_schedule.battery_temp_c,
             "ambient_temp": self.state.ambient_temp_profile,
             "base_schedule": self.state.base_schedule,
-            "final_schedule": self.state.final_schedule,   # v1.2：给解释层用
+            "final_schedule": self.state.final_schedule,   # 给解释层用
             "dr_responses": self.state.dr_responses,
             "feature_importance": self.load_agent.get_feature_importance(),
             "forecast_mape_raw": self.state.forecast_result.mape_without_correction if self.state.forecast_result else 0.0,

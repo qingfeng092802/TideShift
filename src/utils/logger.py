@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""统一日志（P0-17 修复）
+"""统一日志
 
 全仓此前 0 处 logging、40+ 处 print，求解异常只截断塞进内存 progress 从不落盘，
 线上事故零可查证据。本模块提供进程级单例 logger：
 - 控制台 + logs/app.log RotatingFileHandler（5MB × 3 备份）
-- 供 server.py / app.py / 求解回退路径统一使用
+- 供 Web 后端 / CLI / 求解回退路径统一使用
 - 用法：from src.utils.logger import get_logger; log = get_logger(__name__)
 """
 import logging

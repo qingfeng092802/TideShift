@@ -7,7 +7,7 @@
 把电池热损耗、温升约束与寿命衰减折算进 MILP 优化目标 —— 输出的不是好看的曲线，而是能落地的调度策略。
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
+![Version](https://img.shields.io/badge/version-1.0.0-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)

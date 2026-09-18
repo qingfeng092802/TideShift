@@ -25,7 +25,7 @@ class BatteryConfig:
     # 效率
     charge_efficiency: float = 0.95       # 充电效率
     discharge_efficiency: float = 0.95    # 放电效率
-    # 🟢#45：自放电率（每15分钟）。当前 SOC 能量方程未纳入自放电（量级 0.05%/步，
+    # 自放电率（每15分钟）。当前 SOC 能量方程未纳入自放电（量级 0.05%/步，
     # 对日调度结果影响 <0.1%），保留字段供模型扩展时启用，启用前勿删除。
     self_discharge_rate: float = 0.0005
 
@@ -45,7 +45,7 @@ class BatteryConfig:
     # 温度阈值
     temp_normal_max: float = 45.0         # 正常工作上限 ℃
     temp_safe_max: float = 55.0           # 安全停止上限 ℃
-    # 🟢#45：危险温度（≥ 此值触发硬停机告警）。当前两级降额只用到上面两档，
+    # 危险温度（≥ 此值触发硬停机告警）。当前两级降额只用到上面两档，
     # 第三档保留供告警/停机链路扩展时启用，启用前勿删除。
     temp_critical: float = 60.0           # 危险温度 ℃
 
@@ -80,7 +80,7 @@ class PriceConfig:
 
     # 需求响应补贴
     dr_subsidy_per_kwh: float = 0.8       # 削峰补贴 元/kWh
-    # 🟢#45：最小有效响应功率。DR Agent 内以 MIN_MEANINGFUL_RESPONSE_KW=50 常量引用
+    # 最小有效响应功率。DR Agent 内以 MIN_MEANINGFUL_RESPONSE_KW=50 常量引用
     # （见 demand_response_agent.py）；此字段为配置化预留，后续可让 DR Agent 读取此值。
     dr_min_response_kw: float = 100.0     # 最小响应功率
 
@@ -114,7 +114,7 @@ class SystemConfig:
     weight_dr: float = 1.0                 # 需求响应收益权重
 
 
-# 全局单例（P0-04 修复：frozen 不可变，任何位置不得直接赋值属性）
+# 全局单例（修复：frozen 不可变，任何位置不得直接赋值属性）
 # 求解时通过 use_config() 注入线程级配置快照，读取方一律用 active_config()，
 # 保证并发求解参数互不污染、页面线程看到的永远是干净的默认全局配置。
 CONFIG = SystemConfig()

@@ -1,5 +1,5 @@
-# 🟠#24：CI——单元/集成测试（PR 触发，跳过 slow）；nightly 全量 + 覆盖率
-# fix30：python-version 由 3.11 改为 3.13 —— 与 requirements.lock 的生成环境
+# CI——单元/集成测试（PR 触发，跳过 slow）；nightly 全量 + 覆盖率
+# python-version 与 requirements.lock 的生成环境
 #   （Python 3.13.x）和 .python-version 统一。此前三者口径不一致：
 #   声明 3.11 / lock 在 3.13 上生成 / 实测环境为 3.13。
 #   注：3.11 下的兼容性本次未验证，如需支持 3.11 请先跑通本 CI。

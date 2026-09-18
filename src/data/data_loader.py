@@ -1,6 +1,6 @@
 """数据加载器
 
-P0-08 修复：默认数据目录不再相对 CWD 解析（CWD 非项目根时 import 期即 FileNotFoundError，
+默认数据目录不再相对 CWD 解析（CWD 非项目根时 import 期即 FileNotFoundError，
 服务起不来）。改为以本文件位置为基准：src/data/data_loader.py → 项目根 = parents[2]。
 显式传入 data_dir 参数时行为不变（便于测试注入临时数据目录）。
 """

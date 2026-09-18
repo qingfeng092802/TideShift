@@ -20,7 +20,7 @@ from src.utils.config import CONFIG, active_config
 from src.models.battery_thermal_model import BatteryThermalModel, estimate_temperature_rise
 from src.models.battery_degradation_model import BatteryDegradationModel
 
-# 🟢#45：此前 DR 里硬写两处 50（最低有效响应功率），config.price.dr_min_response_kw
+# 此前 DR 里硬写两处 50（最低有效响应功率），config.price.dr_min_response_kw
 # 声明后零引用。收敛为具名常量并注释语义（值保持 50 不变，避免行为变更）。
 MIN_MEANINGFUL_RESPONSE_KW = 50.0  # 低于此功率的响应无商业价值，直接拒绝
 
@@ -54,7 +54,7 @@ class DemandResponseAgent:
     """需求响应Agent"""
 
     def __init__(self, config=None):
-        # 🟠#14 修复：此前 `config or CONFIG` 硬取全局 CONFIG——用户改 soc_max/rated_power
+        # 此前 `config or CONFIG` 硬取全局 CONFIG——用户改 soc_max/rated_power
         # 后 MILP 遵守注入快照、DR 却按默认参数校验，可突破额定功率/超 SOC 放电。
         # 统一改 active_config()：求解线程内返回注入的配置快照，与 MILP 同源。
         self.cfg = config or active_config()
@@ -310,8 +310,8 @@ class DemandResponseAgent:
                 soc -= power * dt / (self.battery_cfg.discharge_efficiency * self.battery_cfg.rated_capacity_kwh)
             soc = np.clip(soc, 0, 1)
 
-        # P1-13 修复：热惯性 τ≈4.2h，DR 窗口结束后温度仍可能继续攀升（过冲漏检，
-        # 独立验证曾实测 DR 后 48.9℃ 超过 45℃ 降额线）。校验扩展为全天温度剖面。
+        # 热惯性 τ≈4.2h：DR 窗口结束后温度仍可能继续攀升——实测 DR 后 48.9℃ 越过了
+        # 45℃ 降额线。因此校验对象是全天温度剖面，而不只是 DR 窗口内那几个点。
         window_max_temp = float(np.max(temp_profile[dr_indices])) if len(dr_indices) > 0 else current_temp
         max_temp = float(np.max(temp_profile)) if len(temp_profile) > 0 else current_temp
         overshoot_note = ""

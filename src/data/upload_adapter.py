@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""上传数据适配（双前端共享的单一事实来源）。
+"""上传数据适配（前后端共享的单一事实来源）。
 
-🟠 背景：`adapt_uploaded_data` 与"默认分时电价"原先在 `app.py` 与 `backend/server.py`
-里各有一份独立实现，已经分叉：
+背景：`adapt_uploaded_data` 与"默认分时电价"曾在两个入口各写一份，于是分叉：
 
   - 分时电价：两份 `_default_price_by_hour` 都自行硬编码了一组时段划分，与
     `data_generator.PRICE_PERIODS`（前端时段图例用的那份）不一致 —— 24 小时里
@@ -12,7 +11,7 @@
     字段名 `price_yuan_per_kwh` / `ambient_temp_c`，文档与 UI 却告诉用户用
     `price` / `temp` —— 按文档上传必定报「缺少必要列」。
 
-本模块把这两段逻辑收敛为唯一实现，两个前端统一 import；不要在前端再复制。
+本模块是这两段逻辑的唯一实现，调用方一律 import；不要在别处再抄一份。
 """
 import numpy as np
 import pandas as pd

@@ -1,7 +1,7 @@
 """
 对话Agent测试（pytest，规则模式，无需 API Key）
 
-v1.1：原来是脚本式 print。现在断言工具函数真的返回了内容、且数字与调度结果一致。
+原来是脚本式 print。现在断言工具函数真的返回了内容、且数字与调度结果一致。
 
 运行：
     pytest tests/test_chat_agent.py -v
@@ -62,7 +62,7 @@ def test_every_tool_returns_content(tools):
 
 
 def test_rule_agent_answers_basic_questions(tools):
-    """🟠#40 修复：不再只断言"非空"——同时校验回答内容的正确性
+    """修复：不再只断言"非空"——同时校验回答内容的正确性
     （收益问题必须带与报表一致的数字、温度问题必须带温度值/安全结论）。"""
     t, report = tools
     # create_agent 第一个参数是 AgentContext（内部再创建 SchedulingTools）

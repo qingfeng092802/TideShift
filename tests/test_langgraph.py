@@ -1,7 +1,7 @@
 """
 LangGraph 编排 vs 纯 Python 编排 一致性测试（pytest）
 
-v1.1：原来只 print 一张对比表。现在断言两种编排的调度结果必须一致，
+原来只 print 一张对比表。现在断言两种编排的调度结果必须一致，
 并且图结构必须真的包含 DR 循环条件边。
 
 运行：
@@ -22,7 +22,7 @@ from src.agents.coordinator_agent import CoordinatorAgent
 from src.agents.demand_response_agent import DRSignal
 from src.data.data_loader import load_load_data
 
-# 🟠#25：真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
+# 真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
 pytestmark = pytest.mark.slow
 
 CFG = CONFIG

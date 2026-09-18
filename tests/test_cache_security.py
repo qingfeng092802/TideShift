@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""🔴#7/T2：cache_security.py 安全测试（此前零覆盖）
+"""cache_security.py 安全测试（此前零覆盖）
 
 覆盖：正常读写回环、篡改载荷拒绝、密钥更换后旧缓存失效、
-受限反序列化白名单（P0-10）、磁盘 LRU 淘汰（P0-19）。
+受限反序列化白名单、磁盘 LRU 淘汰。
 """
 import os
 
@@ -15,7 +15,7 @@ from src.utils import cache_security as cs
 @pytest.fixture()
 def cache_dir(tmp_path, monkeypatch):
     d = str(tmp_path / "cache")
-    # 密钥放独立文件（与缓存目录分离，P0-10 口径）
+    # 密钥放独立文件（与缓存目录分离，口径）
     key_path = str(tmp_path / "cfg" / ".cache_secret")
     monkeypatch.setenv("ENERGY_CACHE_SECRET_FILE", key_path)
     cs._KEY_CACHE = None  # 强制重新加载密钥
@@ -63,7 +63,7 @@ def test_key_rotation_invalidates_cache(cache_dir, tmp_path, monkeypatch):
 
 
 def test_restricted_unpickler_blocks_arbitrary_classes(cache_dir):
-    """P0-10：白名单外的类引用（如 subprocess.Popen）不得被反序列化。"""
+    """白名单外的类引用（如 subprocess.Popen）不得被反序列化。"""
     import pickle as _pickle
     import hashlib, hmac as _hmac
     import subprocess as _subprocess
@@ -80,7 +80,7 @@ def test_restricted_unpickler_blocks_arbitrary_classes(cache_dir):
     else:
         # 若未抛异常，返回值也不得携带白名单外的对象
         ok = out is None or not isinstance(getattr(out, "get", lambda k: None)("evil"), type)
-        assert ok, "白名单外的类被成功反序列化（P0-10 未修复）"
+        assert ok, "白名单外的类被成功反序列化"
 
 
 def test_disk_lru_eviction(cache_dir):

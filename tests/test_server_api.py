@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""🔴#7/T3：FastAPI 层 API 安全测试（此前 1273 行 27 个端点零测试）
+"""FastAPI 层 API 安全测试（此前 1273 行 27 个端点零测试）
 
-覆盖：未登录 401、登录成功拿 token、must_change 强制拦截（🔴#3）、
-登录限流（🟠#21）、SSRF 黑名单（P0-03）、会话隔离（🔴#4）。
+覆盖：未登录 401、登录成功拿 token、must_change 强制拦截、
+登录限流、SSRF 黑名单、会话隔离。
 不触发 MILP 求解——全部是秒级安全语义测试。
 """
 import os
@@ -80,7 +80,7 @@ def test_wrong_password_401(client):
 
 
 def test_must_change_blocks_api(monkeypatch, client):
-    """🔴#3：must_change=true 时中间件必须拦截改密接口以外的全部 /api/*。"""
+    """must_change=true 时中间件必须拦截改密接口以外的全部 /api/*。"""
     monkeypatch.setattr(server.AUTH, "_state", {**server.AUTH._state, "must_change": True})
     r = client.post("/api/auth/login", json={"username": server.AUTH.username,
                                              "password": "test-password-123"})
@@ -105,7 +105,7 @@ def test_ssrf_blocked():
 
 
 def test_login_rate_limit(client):
-    """🟠#21：连续失败达到阈值后锁定（429）。"""
+    """连续失败达到阈值后锁定（429）。"""
     victim = "ratelimit-victim-user"
     for _ in range(server._LOGIN_MAX_FAILS):
         r = client.post("/api/auth/login", json={"username": victim, "password": "wrong"})

@@ -25,10 +25,10 @@ const App = {
     if (localStorage.getItem("compact") === "1") document.documentElement.classList.add("compact");
     this.renderThemeIcon();
     State.boot = await API.get("/api/bootstrap");
-    // P0-F1：版本号单一事实来源——侧栏副标题从 /api/bootstrap 动态渲染，不再硬编码
+    // 版本号单一事实来源——侧栏副标题从 /api/bootstrap 动态渲染，不再硬编码
     const bs = $("#brand-sub");
     if (bs && State.boot.version) bs.textContent = `多智能体调度 v${State.boot.version} · LLM 解释层`;
-    // 同源修复：欢迎页底部此前硬编码 v2.4.3，发版后不随版本更新（版本漂移）
+    // 版本号一律来自 /api/bootstrap，禁止硬编码 —— 硬编码必然在发版后漂移
     const wv = $("#wl-version");
     if (wv && State.boot.version) wv.textContent = `v${State.boot.version}`;
     this.renderNav();
@@ -37,14 +37,14 @@ const App = {
     this.bindGlobal();
     this.renderChat();
     this.showPage("dashboard");
-    // 未就绪 → 自动触发求解并轮询（与原版首启一致）
+    // 未就绪 → 自动触发求解并轮询，首启不需要用户先点按钮
     this.checkSolve();
     setInterval(() => this.pollProgress(), 900);
     // P2：标签页隐藏时暂停轮询（此前后台 8h ≈ 6400 次无效请求）；恢复可见立即补拉一次
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) this.pollProgress();
     });
-    // P0-1：窄屏首屏死锁修复——窄屏初始化强制收起 sidebar（否则 fixed 侧栏+遮罩挡住收起按钮）
+    // 窄屏首屏死锁修复——窄屏初始化强制收起 sidebar（否则 fixed 侧栏+遮罩挡住收起按钮）
     if (window.matchMedia("(max-width: 900px)").matches) {
       $("#sidebar").classList.add("collapsed");
       syncSidebarTrack();
@@ -54,7 +54,7 @@ const App = {
       $("#sidebar").classList.add("collapsed");
       syncSidebarTrack();
     }
-    // P0-1：窄屏下点击遮罩区域（侧栏与收起按钮之外）即收起侧栏
+    // 窄屏下点击遮罩区域（侧栏与收起按钮之外）即收起侧栏
     document.addEventListener("click", (e) => {
       if (window.matchMedia("(max-width: 900px)").matches
           && !$("#sidebar").classList.contains("collapsed")
@@ -172,7 +172,7 @@ const App = {
       if (e.dataTransfer.files[0]) await this.doUpload(e.dataTransfer.files[0]);
     });
     $("#btn-upload-clear").addEventListener("click", async () => {
-      // P0-F3 修复：改走统一 API 层（API.delete → _handleResp）——401 时自动弹统一登录层，
+      // 改走统一 API 层（API.delete → _handleResp）——401 时自动弹统一登录层，
       // 其余错误给明确 toast；此前裸 fetch 绕过统一错误处理，体验与安全策略不一致。
       try {
         await API.delete("/api/upload");
@@ -202,7 +202,7 @@ const App = {
 
   /* ---------- 页面切换 ---------- */
   async showPage(id) {
-    // P0-1：请求序号防竞态——await 期间用户切页时，过期响应直接丢弃，避免覆盖新页面
+    // 请求序号防竞态——await 期间用户切页时，过期响应直接丢弃，避免覆盖新页面
     const seq = (this._pageSeq = (this._pageSeq || 0) + 1);
     State.page = id;
     $$("#nav .nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === id));
@@ -275,7 +275,7 @@ const App = {
   },
 
   async pollProgress() {
-    // P2-12：空闲（已 solved）时 900ms 轮询退避为 ~4.5s 一次；求解中保持 900ms
+    // 空闲（已 solved）时 900ms 轮询退避为 ~4.5s 一次；求解中保持 900ms
     if (this._lastPr && this._lastPr.solved && !State.solving) {
       this._idleTick = (this._idleTick || 0) + 1;
       if (this._idleTick % 5 !== 0) return;
@@ -365,7 +365,7 @@ const App = {
   },
 };
 
-/* ---------- P0-04 登录浮层（原生 dialog + showModal：自带焦点陷阱，Tab 无法穿透背景） ---------- */
+/* ---------- 登录浮层（原生 dialog + showModal：自带焦点陷阱，Tab 无法穿透背景） ---------- */
 window.__showLogin = function () {
   if ($("#login-veil")) return;
   const dlg = document.createElement("dialog");
@@ -564,7 +564,7 @@ Object.assign(App, {
     const resBox = $("#upload-result");
     resBox.className = "upload-msg busy";
     resBox.textContent = "⏳ 正在解析文件…";
-    // P0-3 修复：兜底 try/catch——此前网络断/401/5xx 时 unhandled rejection，
+    // 兜底 try/catch——此前网络断/401/5xx 时 unhandled rejection，
     // 弹窗永久卡在"解析中…"假死
     try {
       const r = await API.upload(file);
@@ -601,7 +601,7 @@ Object.assign(App, {
     if (localStorage.getItem("theme_follow") !== "1") localStorage.setItem("theme", t);
     document.documentElement.setAttribute("data-theme", t);
     this.renderThemeIcon();
-    // P0-2：主题是纯前端关注点——保留数据缓存，仅用缓存重渲染当前页。
+    // 主题是纯前端关注点——保留数据缓存，仅用缓存重渲染当前页。
     // 图表配色在渲染时经 chartPalette() 读取 State.theme，无需重拉后端数据。
     if (State.solving) return;
     // P1：推迟一帧渲染，让 body/卡片背景渐变先启动，消除主题切换的整页"瞬切感"
@@ -614,7 +614,7 @@ Object.assign(App, {
   },
 });
 
-/* 对话面板默认收起（与原版一致，localStorage 恢复） */
+/* 对话面板默认收起，展开状态由 localStorage 恢复 */
 try {
   if (localStorage.getItem("chatPanelCollapsed") === "0") document.body.classList.add("chat-open");
 } catch (e) {}
