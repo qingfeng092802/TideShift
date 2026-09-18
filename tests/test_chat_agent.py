@@ -143,5 +143,76 @@ def test_routing_does_not_misfire_on_dispatch_keywords(tools):
     assert "调整参数重跑" in resp, f"调参意图未被识别：{resp[:120]}"
 
 
+# ---------- F3：参数抽取与分支优先序（由 evals/ 评测暴露出的真实缺陷）----------
+
+def _routed_tools(tools, question: str):
+    """规则路由**实际**调了哪些工具 —— 用评测层的记录器看，不靠解析回答文本猜。
+
+    注意必须把 fixture 里那个 SchedulingTools 实例直接交给 RuleBasedAgent：
+    `create_agent(tools.ctx)` 会另建一个实例，记录器包在旧对象上就什么都抓不到。
+    """
+    from evals.recorder import install
+    from src.agents.chat_agent import RuleBasedAgent
+    agent = RuleBasedAgent(tools)
+    rec = install(tools)
+    try:
+        answer = agent.respond(question)
+    finally:
+        rec.uninstall()
+    return rec, answer
+
+
+@pytest.mark.parametrize("utterance,want", [
+    # README 的示例句：贪婪 {0,5} 会把 "80%" 截成 "0"，按 soc_max=0 去跑真实 MILP
+    ("把SOC上限调到80%重跑", {"soc_max": 80}),
+    ("把 SOC 上限调到 80% 重跑", {"soc_max": 80}),
+    ("SOC下限改成30%再算一次", {"soc_min": 30}),
+    ("SOC上限调到85%、额定功率800kW重跑", {"soc_max": 85, "rated_power": 800}),
+    ("关掉热约束重新跑一遍", {"include_thermal": False}),
+    ("不参与需求响应，再算一次", {"enable_dr": False}),
+    ("soc上限调到999重跑", {}),          # 越界值不传，交给上层用默认约束
+])
+def test_param_extraction_from_utterance(utterance, want):
+    from src.agents.chat_agent import RuleBasedAgent
+    agent = RuleBasedAgent(None)         # _extract_params 不触碰 tools
+    assert agent._extract_params(utterance) == want, utterance
+
+
+def test_run_verb_wins_over_bare_thermal_keyword(tools):
+    """「关掉热约束重新跑一遍」曾被裸字 "热" 劫持到温度查询。"""
+    t, _ = tools
+    rec, _ = _routed_tools(t, "关掉热约束重新跑一遍")
+    assert [c.tool for c in rec.calls] == ["run_with_params"]
+    assert rec.calls[0].args["include_thermal"] is False
+
+
+def test_run_verb_wins_over_dr_query(tools):
+    t, _ = tools
+    rec, _ = _routed_tools(t, "不参与需求响应，再算一次")
+    assert [c.tool for c in rec.calls] == ["run_with_params"]
+    assert rec.calls[0].args["enable_dr"] is False
+
+
+def test_bare_run_verb_without_params_still_answers_query(tools):
+    """只说"重新算一下和基准的对比"却没给参数：不该回调参引导语，该给对比结果。"""
+    t, _ = tools
+    rec, answer = _routed_tools(t, "帮我重新算一下和基准的对比")
+    assert [c.tool for c in rec.calls] == ["compare_baseline"], answer
+
+
+@pytest.mark.parametrize("question,attr", [
+    ("今天等效循环多少次", "equivalent_cycles"),
+    ("今天充了多少度电", "charge_energy_kwh"),
+    ("今天的电池衰减成本是多少", "degradation_cost_yuan"),
+])
+def test_report_answers_carry_matching_numbers(tools, question, attr):
+    """报表里已有的指标，问得到、且数字与报表一致（不是回一句引导语）。"""
+    from evals.metrics import number_in_text
+    t, report = tools
+    rec, answer = _routed_tools(t, question)
+    assert [c.tool for c in rec.calls] == ["get_report"], answer
+    assert number_in_text(float(getattr(report, attr)), answer, tol=0.5), answer
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

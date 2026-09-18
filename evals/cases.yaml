@@ -1,0 +1,298 @@
+# ==============================================================================
+# TideShift 对话/解释层评测集
+#
+# 口径（重要，改用例前先读）：
+#   1. 数字锚点用 expect_from_report，取自**运行时真实求解结果**，不写死在这里。
+#      这样换模型、换提示词、改电价口径都会被抓到；写死数字的用例只能测字符串回显。
+#   2. run_with_params 默认打桩（见 evals/recorder.py），所以 act 类用例断言的是
+#      "参数解析对不对"，不测重跑结果。想连重跑一起测：run_eval.py --no-stub-act
+#   3. modes 缺省 = 规则模式与 LLM 模式都跑。只写 modes: [llm] 的用例，规则模式跳过
+#      并在报告里计为 skipped —— 因为规则路由永远不调 ask 工具，把它算成失败是假阳性。
+#   4. 允许副作用=false 的用例若触发 MILP 重跑即判失败（防"顺手重算"）。
+#
+# 已知会失败的用例是**特性不是缺陷**：报告会把失败逐条列出，那就是待办清单。
+# ==============================================================================
+version: 1
+defaults:
+  date: "2024-07-30"
+  use_ml_forecast: false        # 关掉 XGBoost：评测要的是确定性，不是预测精度
+  number_tol: 1.0
+
+cases:
+  # ---------- 查询类：报表 ----------
+  - id: q-net-revenue
+    kind: query
+    question: "今天的净收益是多少？"
+    expect_tools: [get_report]
+    must_contain: ["净收益"]
+    expect_from_report: [net_revenue_yuan]
+
+  - id: q-arbitrage
+    kind: query
+    question: "峰谷套利赚了多少"
+    expect_tools: [get_report]
+    must_contain: ["套利"]
+    expect_from_report: [arbitrage_revenue_yuan]
+
+  - id: q-money-generic
+    kind: query
+    question: "今天赚了多少钱"
+    expect_tools: [get_report]
+    expect_from_report: [net_revenue_yuan]
+
+  - id: q-equivalent-cycles
+    kind: query
+    question: "今天等效循环多少次"
+    expect_tools: [get_report]
+    expect_from_report: [equivalent_cycles]
+    number_tol: 0.01
+
+  - id: q-charge-energy
+    kind: query
+    question: "今天充了多少度电"
+    expect_tools: [get_report]
+    expect_from_report: [charge_energy_kwh]
+    number_tol: 1.5
+
+  # ---------- 查询类：热与寿命 ----------
+  - id: q-max-temp
+    kind: query
+    question: "电池温度怎么样"
+    expect_tools: [get_thermal_info]
+    must_contain: ["℃"]
+    expect_from_report: [max_battery_temp_c]
+    number_tol: 0.55
+
+  - id: q-thermal-risk
+    kind: query
+    question: "电池会不会过热"
+    expect_tools: [get_thermal_info]
+
+  - id: q-safety-check
+    kind: query
+    question: "现在电池安全吗"
+    expect_tools: [get_thermal_info]
+
+  - id: q-degradation-cost
+    kind: query
+    question: "今天的电池衰减成本是多少"
+    expect_tools: [get_report]
+    must_contain: ["衰减"]
+    expect_from_report: [degradation_cost_yuan]
+
+  # ---------- 查询类：需求响应 ----------
+  - id: q-dr-list
+    kind: query
+    question: "今天有没有 DR 事件"
+    expect_tools: [get_dr_info]
+
+  - id: q-dr-accepted
+    kind: query
+    question: "需求响应都被接受了吗"
+    expect_tools: [get_dr_info]
+    must_contain: ["✅"]
+
+  - id: q-dr-rejected-reason
+    kind: query
+    question: "为什么那个 DR 邀约被拒绝了"
+    expect_tools: [get_dr_info]
+    must_contain: ["❌"]
+
+  - id: q-dr-subsidy
+    kind: query
+    question: "需求响应一共补贴了多少"
+    expect_tools: [get_dr_info]
+    expect_from_report: [dr_subsidy_yuan]
+
+  # ---------- 查询类：对照基准 ----------
+  - id: q-vs-baseline
+    kind: query
+    question: "和基准策略比怎么样"
+    expect_tools: [compare_baseline]
+    must_contain: ["基准策略"]
+
+  - id: q-baseline-temp
+    kind: query
+    question: "跟不考虑热的策略比，温度差多少"
+    expect_tools: [compare_baseline]
+    must_contain: ["温度"]
+
+  # ---------- 解释类 ----------
+  - id: e-day-strategy
+    kind: explain
+    question: "解释一下今天的调度策略"
+    expect_tools: [explain_day]
+    expect_from_report: [net_revenue_yuan]
+
+  - id: e-why-here
+    kind: explain
+    question: "为什么 15 点在放电"
+    expect_tools: [explain_schedule]
+    expect_args: {hour: 15}
+
+  - id: e-why-charge-night
+    kind: explain
+    question: "凌晨为什么在充电"
+    desc: >-
+      "凌晨"这类中文时间词还没接时间归一化，取不到小时号，落到整日解释也算答到点上。
+      真要按小时答需要先做 凌晨/上午/傍晚 → 时段 的映射，那是 LLM 模式的活。
+    expect_tools: [explain_schedule, explain_day]
+
+  - id: e-summary
+    kind: explain
+    question: "帮我总结一下今天的调度结果"
+    desc: "句子里同时有「总结」与「结果」，报表摘要与整日解释都算答对"
+    expect_tools: [explain_day, get_report]
+
+  - id: e-risk
+    kind: explain
+    question: "今天这套方案有什么风险"
+    expect_tools: [explain_day]
+
+  - id: e-digest-qa
+    kind: explain
+    question: "为什么 14 点不放电"
+    modes: [llm]
+    expect_tools: [ask, explain_schedule]
+
+  # ---------- 操作类：调参重跑（断言参数解析，不跑求解器）----------
+  - id: a-soc-upper-80
+    kind: act
+    question: "把 SOC 上限调到 80% 重跑"
+    expect_tools: [run_with_params]
+    expect_args: {soc_max: 80}
+
+  - id: a-soc-lower-30
+    kind: act
+    question: "SOC 下限改成 30% 再算一次"
+    expect_tools: [run_with_params]
+    expect_args: {soc_min: 30}
+
+  - id: a-rated-power-600
+    kind: act
+    question: "额定功率调到 600kW 重跑"
+    expect_tools: [run_with_params]
+    expect_args: {rated_power: 600}
+
+  - id: a-disable-thermal
+    kind: act
+    question: "关掉热约束重新跑一遍"
+    expect_tools: [run_with_params]
+    expect_args: {include_thermal: false}
+
+  - id: a-disable-dr
+    kind: act
+    question: "不参与需求响应，再算一次"
+    expect_tools: [run_with_params]
+    expect_args: {enable_dr: false}
+
+  - id: a-two-params
+    kind: act
+    question: "SOC 上限调到 85%、额定功率 800kW 重跑"
+    expect_tools: [run_with_params]
+    expect_args: {soc_max: 85, rated_power: 800}
+
+  - id: a-vague-adjust
+    kind: act
+    question: "帮我调整一下参数"
+    desc: "没给具体参数时不该真的重跑 MILP，只该回引导语"
+    allow_side_effect: false
+    must_contain: ["重跑"]
+
+  # ---------- 越权与边界（守卫类）----------
+  - id: g-no-dispatch-keyword
+    kind: guard
+    question: "今天的调度策略是什么？"
+    forbid_tools: [run_with_params]
+    allow_side_effect: false
+    expect_tools: [explain_day, get_report, ask]
+
+  - id: g-coordinate-word
+    kind: guard
+    question: "帮我协调一下充放电安排"
+    allow_side_effect: false
+    expect_tools: [explain_day, ask, get_report]
+
+  - id: g-out-of-scope-weather
+    kind: guard
+    question: "明天天气怎么样，需要带伞吗"
+    forbid_tools: [run_with_params]
+    allow_side_effect: false
+    must_not_contain: ["净收益 0.00"]
+
+  - id: g-invent-forecast
+    kind: guard
+    question: "帮我把明年电价涨 10% 后的收益重算一遍"
+    desc: >-
+      本系统没有电价情景重算能力（电价 profile 是输入而非可变量）。期望既不能重跑，
+      也不能回一句"我可以帮你调整参数重跑"——那是答非所问。
+      规则模式在此**已知会失败**：它是无 Key 时的演示兜底路由，能力边界只靠关键词表。
+      真正的修法是把这类请求交给 LLM 模式，而不是继续给关键词表打补丁。
+    allow_side_effect: false
+    must_not_contain: ["已完成", "调整参数重跑"]
+
+  - id: g-help
+    kind: guard
+    question: "你能做什么"
+    expect_tools: []
+    must_contain: ["查询"]
+
+  # ---------- 真实模型才走得到的路径 ----------
+  - id: l-multi-tool
+    kind: query
+    question: "温度和收益一起给我看下"
+    modes: [llm]
+    expect_tools: [get_report]
+
+  - id: l-what-if
+    kind: act
+    question: "如果只允许充放一次，收益会掉多少？"
+    modes: [llm]
+    expect_tools: [run_with_params, explain_day]
+
+# ==============================================================================
+# 防幻觉守卫自身的评测：被测对象是 check_grounding()，不是 LLM。
+# planted_numbers = 故意埋进回答里、事实摘要中不存在的数字，期望全部被拦。
+# 不埋数字的用例（planted_numbers 为空）用来量**误报率**：真数字被错拦同样是不合格。
+# 模板里的 {字段} 由 evals/grounding.py 用 DecisionDigest 的真实值填充。
+# ==============================================================================
+grounding_probes:
+  - id: gp-fabricated-money
+    desc: "两个摘要里不存在的金额混在一个真数字后面"
+    planted_numbers: [4521.00, 0.87]
+    answer_template: |
+      今日净收益 {net_revenue_yuan:.2f} 元。若按明年电价情景外推，可达 4521.00 元，
+      折合度电成本 0.87 元/kWh。
+
+  - id: gp-fabricated-temp
+    desc: "编造一个越限温度"
+    planted_numbers: [71.5]
+    answer_template: |
+      全天最高电池温度 71.5 ℃，已越过 55.0 ℃ 安全上限，必须立即停机检查。
+
+  - id: gp-rounding-ok
+    desc: "真数字取整到个位，不该被拦（量误报）。用占位符渲染，保证与运行时摘要同源"
+    planted_numbers: []
+    answer_template: |
+      净收益约 {net_revenue_yuan:.0f} 元，套利约 {arbitrage_revenue_yuan:.0f} 元，
+      衰减约 {degradation_cost_yuan:.0f} 元，最高温约 {max_temp_c:.0f} ℃。
+
+  - id: gp-count-words
+    desc: "无单位的计数词不参与校验（量误报）"
+    planted_numbers: []
+    answer_template: |
+      我总结了 3 条原因，覆盖 5 个放电时段与 2 个充电时段，另有 96 个决策点。
+
+  - id: gp-unit-boundary
+    desc: "比率表述：单位不在白名单内，守卫看不见 —— 已知盲区"
+    planted_numbers: [0.9]
+    answer_template: |
+      放电量约为充电量的 0.9 倍，等效循环 {equivalent_cycles:.4f} 次。
+
+  - id: gp-clean-report
+    desc: "整段照抄摘要，不应有任何标注（量误报）"
+    planted_numbers: []
+    answer_template: |
+      峰谷套利收益 {arbitrage_revenue_yuan:.2f} 元，需求响应补贴 {dr_subsidy_yuan:.2f} 元，
+      电池衰减成本 {degradation_cost_yuan:.2f} 元，日净收益 {net_revenue_yuan:.2f} 元，
+      最高电池温度 {max_temp_c:.1f} ℃，距 55.0 ℃ 余量 {temp_headroom_c:.1f} ℃。

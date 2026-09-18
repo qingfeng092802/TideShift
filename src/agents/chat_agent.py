@@ -81,8 +81,11 @@ class SchedulingTools:
             )
         return self._explainer_cache
 
-    def _digest(self):
-        """把当前调度结果压成事实摘要；没有调度结果返回 None"""
+    def current_digest(self):
+        """把当前调度结果压成事实摘要；没有调度结果返回 None。
+
+        摘要即"LLM 允许引用的全部事实"——解释层与防幻觉回查都以它为准。
+        """
         if self.ctx.report is None or not self.ctx.viz_data:
             return None
         from src.agents.llm_explainer import build_digest
@@ -120,7 +123,7 @@ class SchedulingTools:
         副作用：把本次解释的来源写入 ``self.last_explain_source``，
         取值 "llm" | "rule"；无调度结果时为 "none"。
         """
-        digest = self._digest()
+        digest = self.current_digest()
         if digest is None:
             self.last_explain_source = "none"
             return "请先运行调度。"
@@ -134,7 +137,7 @@ class SchedulingTools:
 
     def ask(self, question: str) -> str:
         """基于当日调度事实摘要回答自然语言问题（数字全部来自摘要，不现算）"""
-        digest = self._digest()
+        digest = self.current_digest()
         if digest is None:
             return "请先运行调度。"
         res = self._explainer().explain(digest, question)
@@ -322,19 +325,75 @@ class RuleBasedAgent:
     def __init__(self, tools: SchedulingTools):
         self.tools = tools
 
+    # 明确的"重跑"类动词、调参类动词、以及参数对象词表。
+    # ⚠️ 调参类动词必须同时锚定「动作词 + 参数对象」，不能只靠单个汉字。
+    #    历史问题：列表里含裸字 "调"，而「调度」「协调」都含 "调"，
+    #    导致「今天的调度策略是什么？」误进调参分支（返回调参提示而非解释）。
+    #    只把 "调" 换成 "调一下" 也不够——「协调一下」同样含该子串。
+    RUN_VERBS = ("重跑", "重新跑", "再跑", "重算", "重新算", "再算")
+    ADJUST_VERBS = ("调整", "调一下", "调成", "调到", "改成", "设为")
+    PARAM_WORDS = ("soc", "功率", "上限", "下限", "热约束", "温度约束",
+                   "需求响应", "dr", "kw", "千瓦", "参数")
+    # 只判 "关" 会把「不参与需求响应」读成"要参与"。
+    NEGATIONS = ("关", "去掉", "不用", "不参与", "取消", "禁用", "不要")
+
+    def _extract_params(self, text: str) -> Dict[str, Any]:
+        """从指令里抽取 run_with_params 的参数；抽不到返回空字典。
+
+        正则中间段用惰性量词 `{0,5}?`。原先是贪婪 `{0,5}`：对「SOC上限调到80%」
+        它会先尽量多吃字符，最后只把 "0" 当数字捕获，于是**按 soc_max=0 去跑真实
+        MILP**——README 自己的示例就会触发。惰性匹配让数字段尽早从 "80" 起捕。
+        """
+        text = (text or "").lower()   # 自己兜底归一化，不依赖调用方已 lower
+        params: Dict[str, Any] = {}
+        soc_min_m = re.search(r'soc.{0,5}?(?:下限|最低|min).{0,5}?(\d{1,3})', text)
+        soc_max_m = re.search(r'soc.{0,5}?(?:上限|最高|max).{0,5}?(\d{1,3})', text)
+        power_m = re.search(r'(\d{3,4})\s*(?:kw|千瓦|功率)', text)
+
+        # SOC 只接受 1~100：越界值会让 MILP 静默按错误约束求解，宁可不传并留日志。
+        for match, key in ((soc_min_m, "soc_min"), (soc_max_m, "soc_max")):
+            if match:
+                value = int(match.group(1))
+                if 0 < value <= 100:
+                    params[key] = value
+                else:
+                    log.warning("忽略越界 SOC 值 %s=%d（应在 1~100）", key, value)
+        if power_m:
+            params["rated_power"] = int(power_m.group(1))
+        if "热约束" in text or "温度约束" in text:
+            params["include_thermal"] = not any(n in text for n in self.NEGATIONS)
+        if "需求响应" in text or "dr" in text:
+            params["enable_dr"] = not any(n in text for n in self.NEGATIONS)
+        return params
+
     def respond(self, user_input: str) -> str:
         text = user_input.lower()
+
+        # 明确的重跑动词排在所有查询分支之前：「关掉热约束重新跑一遍」此前会被
+        # 下游的裸字 "热" 劫持到温度查询，用户要的是一次真实重算。
+        # 抽不到参数时不立刻执行，继续往下走查询分支，
+        # 让「帮我重新算一下和基准的对比」这类句子仍能拿到对比结果。
+        pending_run = False
+        if any(k in text for k in self.RUN_VERBS):
+            params = self._extract_params(text)
+            if params:
+                return self.tools.run_with_params(**params)
+            pending_run = True
 
         # 对比基准
         if any(k in text for k in ["对比", "基准", "比较", "比怎么样", "相比", "差距"]):
             return self.tools.compare_baseline()
 
-        # 报表/收益查询
-        if any(k in text for k in ["收益", "赚", "报表", "结果", "多少钱", "净收益", "套利", "营收"]):
+        # 报表/收益查询：get_report 一张表里含收益/电量/温度/循环/MAPE，
+        # 所以关键词覆盖"报表里有什么"，而不是只覆盖"钱"。
+        if any(k in text for k in ["收益", "赚", "报表", "结果", "多少钱", "净收益", "套利",
+                                   "营收", "循环", "电量", "度电", "衰减", "成本",
+                                   "预测", "mape"]):
             return self.tools.get_report()
 
-        # 温度/热模型
-        if any(k in text for k in ["温度", "热", "温升", "过温", "安全"]):
+        # 温度/热模型（"热约束" 是调参意图的参数对象，不属于温度查询）
+        if ("热约束" not in text
+                and any(k in text for k in ["温度", "热", "温升", "过温", "安全"])):
             return self.tools.get_thermal_info()
 
         # 需求响应
@@ -348,37 +407,15 @@ class RuleBasedAgent:
             return self.tools.explain_schedule(hour)
 
         # v1.2：整日决策解释（LLM 优先，无 Key 自动降级规则模板）
-        # 「策略」单列入此：此前只靠下游的裸字 "调" 命中，"调度策略"被误路由到
-        # 「调整参数重跑」分支，用户问调度策略得到的是调参提示。
         if any(k in text for k in ["解释", "为什么", "为啥", "分析", "总结", "解读", "决策",
-                                   "怎么安排的", "思路", "策略"]):
+                                   "怎么安排的", "思路", "策略", "安排", "风险", "注意"]):
             return self.tools.explain_day(user_input)
 
-        # 重新运行/调参
-        # ⚠️ 关键词必须同时锚定「动作词 + 参数对象」，不能只靠单个汉字。
-        #    历史问题：列表里含裸字 "调"，而「调度」「协调」都含 "调"，
-        #    导致「今天的调度策略是什么？」误进本分支（返回调参提示而非解释）。
-        #    只把 "调" 换成 "调一下" 也不够——「协调一下」同样含该子串。
-        #    因此改为：① 明确的"重跑"类动词直接命中；
-        #              ② 调参类动词必须与参数对象同时出现才命中。
-        RUN_VERBS = ("重跑", "重新跑", "再跑", "重算", "重新算")
-        ADJUST_VERBS = ("调整", "调一下", "调成", "调到", "改成", "设为")
-        PARAM_WORDS = ("soc", "功率", "上限", "下限", "热约束", "温度约束",
-                       "需求响应", "dr", "kw", "千瓦", "参数")
-        if any(k in text for k in RUN_VERBS) or (
-                any(k in text for k in ADJUST_VERBS)
-                and any(k in text for k in PARAM_WORDS)):
-            params = {}
-            soc_min_m = re.search(r'soc.{0,5}(?:下限|最低|min).{0,5}(\d{1,3})', text)
-            soc_max_m = re.search(r'soc.{0,5}(?:上限|最高|max).{0,5}(\d{1,3})', text)
-            power_m = re.search(r'(\d{3,4})\s*(?:kw|千瓦|功率)', text)
-            if soc_min_m: params["soc_min"] = int(soc_min_m.group(1))
-            if soc_max_m: params["soc_max"] = int(soc_max_m.group(1))
-            if power_m: params["rated_power"] = int(power_m.group(1))
-            if "热约束" in text or "温度约束" in text:
-                params["include_thermal"] = "关" not in text and "去掉" not in text
-            if "需求响应" in text or "dr" in text:
-                params["enable_dr"] = "关" not in text and "去掉" not in text
+        # 调参重跑：动作词与参数对象同时出现才执行（见类注释里的裸字 "调" 教训）
+        if pending_run or (
+                any(k in text for k in self.ADJUST_VERBS)
+                and any(k in text for k in self.PARAM_WORDS)):
+            params = self._extract_params(text)
             if params:
                 return self.tools.run_with_params(**params)
             return "我可以帮你调整参数重跑，例如：'把SOC上限调到80%重跑'、'关掉热约束再算一次'"

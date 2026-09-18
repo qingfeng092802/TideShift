@@ -406,6 +406,14 @@ TideShift/
 │   ├── load/dr_signals.csv          # DR 事件**示例数据**（⚠️ Web 流程不读取，见常见问题）
 │   ├── price/typical_price.csv
 │   └── battery/battery_params.csv
+├── evals/                           # agent 行为评测（与 tests/ 分开计量，见 evals/README.md）
+│   ├── cases.yaml                   # 35 条对话用例 + 6 类防幻觉探针（数字锚点取自运行时报表）
+│   ├── metrics.py                   # 四维判定与分母口径（纯函数，无 I/O）
+│   ├── recorder.py                  # 工具调用记录器 + MILP 重跑打桩
+│   ├── grounding.py                 # 评 check_grounding() 自身：捕获率 / 误报率
+│   ├── harness.py                   # 一次求解全程复用；规则 / LLM 双模式
+│   ├── run_eval.py                  # CLI：报告生成 + 基线回归门禁
+│   └── reports/                     # rule-latest.md（当前实测）+ baseline.json（回归基线）
 ├── tests/                           # pytest 真实断言，无占位用例
 ├── docs/
 │   ├── experiments.md               # 完整实验记录 + 未复核项清单 + 复现命令
@@ -495,14 +503,23 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 
 **降级链**：无 API Key / 网络失败 / 响应异常 / 任何报错 → 一律走 `template_explain()` 规则模板，输出结构与 LLM 一致，绝不把主流程拖挂。
 
-实测（2026-09-08，2024-07-30 调度日）：
+**评测**（`python -m evals.run_eval`，离线规则模式，约 45 秒，调度日 2024-07-30）：
 
-| 场景 | 结果 |
-|------|------|
-| 无 Key 跑全流程 | 解释来源 `rule`，规则模板正常输出 |
-| mock LLM 编造 `9999.00 元` | 回查 2/3 命中，编造数字被标注在回答末尾 |
-| mock LLM 抛异常 | 降级 `rule`，主流程不受影响 |
-| 事实摘要数字条目 | 86 个（含充放电窗口的电量与均价） |
+| 指标 | 值 | 说明 |
+|------|-----|------|
+| 对话任务成功率 | **0.969**（31/32） | 工具选对 + 要点齐全 + 数字与真实报表一致 + 无越权副作用，四维全对才计通过 |
+| 编造数字捕获率 | **0.750**（3/4） | 向回答里主动埋入摘要中不存在的数字，看守卫拦下几个 |
+| 守卫误报率 | **0.000** | 真数字（含取整、无单位计数词）被错拦的比例 |
+
+捕获率不是 1.0 因为一个**已登记的盲区**：单位白名单不含"倍"，"放电约为充电的 0.9 倍"
+这类比率表述根本不进入校验。该行为被 `tests/test_evals.py` 钉成断言（断言"漏网"），
+补全白名单后它会红。完整失败用例与口径见 [`evals/reports/rule-latest.md`](evals/reports/rule-latest.md)、
+设计理由见 [`evals/README.md`](evals/README.md)。
+
+> 这套评测在落地当天就抓到一个 P0：`SOC上限调到80%` 的参数正则用了贪婪量词，
+> 实际捕获的是 `0`，系统会**按 SOC 上限 0% 去跑真实 MILP**——而这条输入正是本 README
+> 的示例句。修复见 `src/agents/chat_agent.py::_extract_params` 与
+> `tests/test_chat_agent.py::test_param_extraction_from_utterance`。
 
 ## 量化成果
 
@@ -565,7 +582,13 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **111 项**（快测 88 项 + `slow` 23 项），全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，故 PR CI 默认跳过、全量走 nightly 与手动触发。
+测试规模 **162 项**（快测 131 项 + `slow` 31 项，其中 8 项为 `eval` 标记的 agent 行为评测），
+全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
+故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
+`pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
+
+`eval` 那 8 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
+与其余 154 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。
 
@@ -591,6 +614,8 @@ PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触�
 | `test_server_api.py` | API 认证 / 首登强改密 / 限流 / SSRF |
 | `test_models_boundaries.py` | 数值边界（除零 / NaN / 热模型末点） |
 | `test_alerts_propagation.py` | 告警字段端到端透传 |
+| `test_evals.py` | 评测层自身：四维判定的分母口径、打桩是否真的挡住了 MILP、用例文件完整性（30 项，不依赖求解器与网络） |
+| `test_evals_run.py` | 用评测层量 agent：任务成功率、数字保真、副作用守卫、与 `reports/baseline.json` 的回归比对（`eval + slow`） |
 
 CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
 
