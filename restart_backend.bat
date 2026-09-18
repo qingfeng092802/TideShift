@@ -13,8 +13,8 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8800" ^| findstr "LISTENING
 )
 timeout /t 2 /nobreak >nul
 
-echo [2/3] Starting backend (chat_agent fix22 applied) ...
-rem fix30：此前硬编码开发者本机绝对路径（C:\Users\...），换机必然失败。
+echo [2/3] Starting backend ...
+rem 不得硬编码开发者本机绝对路径（C:\Users\...），换机必然失败。
 rem 现与 start_web.bat 同策略：优先项目内 .venv，否则回退 PATH 中的 python。
 set "PY=python"
 if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"

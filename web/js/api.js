@@ -1,5 +1,5 @@
 /* ================= API 层 + 全局状态 ================= */
-/* P0-02：JWT 会话——token 存 localStorage，401 统一弹登录层 */
+/* JWT 会话——token 存 localStorage，401 统一弹登录层 */
 const AUTH_TOKEN_KEY = "jwt_token";
 function authHeaders() {
   const t = localStorage.getItem(AUTH_TOKEN_KEY);
@@ -42,13 +42,13 @@ const API = {
     const r = await fetch("/api/upload", { method: "POST", headers: authHeaders(), body: fd });
     return _handleResp(r);
   },
-  /* P0-F3 修复：统一 DELETE 通道——此前清除上传用裸 fetch，401 时只弹失败 toast
+  /* 统一 DELETE 通道——此前清除上传用裸 fetch，401 时只弹失败 toast
      而不走 _handleResp 的统一登录浮层；未来 API 层新增安全策略对此接口也无效。 */
   async delete(path) {
     const r = await fetch(path, { method: "DELETE", headers: authHeaders() });
     return _handleResp(r);
   },
-  /* P0-1 修复：带 Authorization 的文件下载（替代 location.href 导航——导航无法携带
+  /* 带 Authorization 的文件下载（替代 location.href 导航——导航无法携带
      JWT 头，在后端全局 /api/* 认证中间件下必 401）。401 时走统一的登录浮层。 */
   async download(path) {
     const r = await fetch(path, { headers: authHeaders() });

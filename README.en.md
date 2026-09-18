@@ -6,7 +6,7 @@
 Battery heat generation, temperature-rise limits and cycle-life degradation are priced into the MILP objective. What comes out is not a pretty curve — it is a dispatch plan a real battery can survive.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Version](https://img.shields.io/badge/version-2.4.4--fix30-orange)
+![Version](https://img.shields.io/badge/version-1.0.0-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)

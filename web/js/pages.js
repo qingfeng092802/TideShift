@@ -3,7 +3,7 @@
 
 const TONE = { ok: "var(--success)", warning: "var(--warning)", danger: "var(--danger)", flat: "var(--text-2)" };
 
-/* P1-14/P1-15：引擎参数唯一来源（/api/bootstrap.engine_config），展示层禁止硬编码 */
+/* 引擎参数唯一来源：/api/bootstrap 的 engine_config，展示层禁止硬编码 */
 function engineCfg() {
   const fb = { thermal: { capacity_kj_k: 15000, resistance_k_w: 0.001, internal_resistance_mohm: 18, efficiency_pct: 95, temp_normal_max: 45, temp_safe_max: 55 },
                price_periods: [] };
@@ -14,7 +14,7 @@ function engineCfg() {
 function opBarHTML(withExport) {
   const dates = State.boot.dates;
   const sel = dates.includes(State.boot.selected_date) ? State.boot.selected_date
-    : dates[Math.min(7, dates.length - 1)]; // P1-F6：短数据集（<8 天）不再取到 undefined
+    : dates[Math.min(7, dates.length - 1)]; // 短数据集（<8 天）不再取到 undefined
   return `<div class="op-bar">
     <label>调度日期</label>
     <select id="op-date">${dates.map((d) => `<option ${d === sel ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
@@ -22,7 +22,7 @@ function opBarHTML(withExport) {
     ${withExport ? `<span class="op-spacer"></span><a class="btn" id="op-export" download>📥 导出调度结果CSV</a>` : `<span class="op-spacer"></span>`}
   </div>`;
 }
-/* P1-F3：页内 subtab 切换逻辑收敛为单一辅助函数——热管理页与需求响应页此前各自复制了一份相同实现 */
+/* 页内 subtab 切换逻辑收敛为单一辅助函数——热管理页与需求响应页此前各自复制了一份相同实现 */
 function bindSubTabs(root) {
   $$(".subtab", root).forEach((b) => b.addEventListener("click", () => {
     $$(".subtab", root).forEach((x) => x.classList.remove("active"));
@@ -37,7 +37,7 @@ function bindOpBar(root, withExport) {  $("#op-date", root).addEventListener("ch
   $("#op-run", root).addEventListener("click", () => App.runSolve());
   if (withExport) $("#op-export", root).addEventListener("click", async (e) => {
     e.preventDefault();
-    // P0-1 修复：location.href 导航无法携带 JWT 头 → 401；改走带认证的 blob 下载
+    // location.href 导航无法携带 JWT 头 → 401；改走带认证的 blob 下载
     const btn = e.currentTarget;
     if (State.solving) { toast("求解进行中，请等进度条完成后导出", "err"); return; }
     btn.disabled = true;
@@ -63,7 +63,7 @@ function aiExpanderHeadInner(source) {
 }
 function aiExpanderHTML(exp) {
   return `<div class="ai-expander${exp.source === "llm" ? " open" : ""}" id="ai-exp">
-    <!-- P1-F2：head 为 <button>（键盘可达，原生 Enter/Space 触发）；此前是 div 仅绑 click，键盘用户无法操作 -->
+    <!-- head 为 <button>（键盘可达，原生 Enter/Space 触发）；此前是 div 仅绑 click，键盘用户无法操作 -->
     <button type="button" class="head" aria-expanded="${exp.source === "llm"}">${aiExpanderHeadInner(exp.source)}</button>
     <div class="body">
       <div class="ai-text">${exp.text ? renderMarkdown(exp.text) : "调度图未生成解释（可能未启用解释层）。点击下方按钮即时生成。"}</div>
@@ -396,7 +396,7 @@ function renderForecast(root, d) {
   } else {
     chartHBar($("#fc-fi", root), ["（模型未训练）"], [0.0], { fmt: () => "-" });
   }
-  // 🟠#13：无实际负荷时后端返回 synthetic=true（空直方图）——明确显示"暂无数据"而非编造分布
+  // 无实际负荷时后端返回 synthetic=true（空直方图）——明确显示"暂无数据"而非编造分布
   const histEl = $("#fc-hist", root);
   if (d.error_hist_synthetic) {
     const box = histEl.closest ? histEl.closest(".panel-card") : null;
@@ -541,7 +541,7 @@ function renderThermal(root, d) {
     State.charts.forEach((c) => c.dispose()); State.charts = [];
     mountThermalCharts(root, d);
   });
-  // 页内 tabs（P1-F3：复用 bindSubTabs，删除重复实现）
+  // 页内 tabs（复用 bindSubTabs，删除重复实现）
   bindSubTabs(root);
   mountThermalCharts(root, d);
 }
@@ -656,7 +656,7 @@ function renderDemandResponse(root, d) {
       校验顺序：热安全 → 用能底线 → 收益净现值，三项全通过才执行响应 · 悬停各项可查看说明
     </div>
   `;
-  // 页内 tabs（P1-F3：复用 bindSubTabs，删除重复实现）
+  // 页内 tabs（复用 bindSubTabs，删除重复实现）
   bindSubTabs(root);
   $("#dr-confirm", root).addEventListener("click", async () => {
     const start = $("#dr-start", root).value, end = $("#dr-end", root).value;
@@ -668,7 +668,7 @@ function renderDemandResponse(root, d) {
       try { r = await _fire(false); }
       catch (e) {
         if (e.status === 409 && e.body && e.body.overlap && await uiConfirm(e.message + "\n\n确要在重叠时段叠加该DR事件？")) {
-          r = await _fire(true); /* P1-07：二次确认后强制叠加 */
+          r = await _fire(true); /* 二次确认后强制叠加 */
         } else { toast("触发失败：" + e.message, "err"); return; }
       }
       toast(r.msg);
@@ -681,7 +681,7 @@ function renderDemandResponse(root, d) {
 /* ============================================================
    页面6 · 系统设置
    ============================================================ */
-/* P1-6 修复：设置页渲染器异常兜底——此前 /api/providers 失败时 promise 无人接住，
+/* 设置页渲染器异常兜底——此前 /api/providers 失败时 promise 无人接住，
    页面静默空白 + unhandled rejection。失败时渲染可重试的错误态。 */
 async function renderSettings(root) {
   try {

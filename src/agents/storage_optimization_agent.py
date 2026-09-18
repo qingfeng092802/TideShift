@@ -11,13 +11,13 @@
    - 电池温升约束（一阶RC热模型 + 产热二次项分段线性化）
    - SOC区间加权寿命衰减成本纳入目标函数
 
-v1.1 修复记录（2026-09-07）：
-  [P0-2] 热模型三个参数量级校准：内阻由效率反推、热阻/热容按2MWh集装箱量级取值
-  [P0-3] 产热 I²R 是二次项，原实现错误地写成线性；改为 SOS2 分段线性（弦）上逼近，
-         保证 MILP 内热约束与后验温度仿真一致（弦高估产热 → 约束保守安全）
-  [P1-1] 新增终值SOC约束，默认循环稳态（SOC_end = SOC_start），消除"吃初始SOC老本"
-  [P1-2] 基准策略重写：谷段充满 + 尖峰放完，严格能量守恒，不再用 np.clip 掩盖越界
-  [P1-4] 寿命衰减从"常数1.3"改为真正的 SOC 区间加权，优化器会主动避开深充深放
+模型口径（演进史见 CHANGELOG.md，代码里不重复记）：
+  - 热模型三个参数量级按 2MWh 集装箱取值，内阻由效率反推；
+  - 产热 I²R 是功率的二次项，用 SOS2 分段线性做**弦上**逼近：弦在函数上方 →
+    产热被高估 → 温度约束偏保守，且 MILP 内的热约束与后验温度仿真口径一致；
+  - 终值 SOC 约束默认循环稳态（SOC_end = SOC_start），避免"吃初始 SOC 老本"；
+  - 基准策略严格能量守恒，不用 np.clip 掩盖越界；
+  - 寿命衰减按 SOC 区间加权（非常数），优化器会主动避开深充深放。
 """
 import numpy as np
 import pandas as pd
@@ -51,13 +51,13 @@ class ScheduleResult:
     max_battery_temp_c: float         # 最高电池温度
     equivalent_cycles: float          # 等效循环次数
     solver_status: str                # 求解器状态
-    # v1.1 新增
+
     terminal_soc: float = 0.0              # 终值SOC（稳态口径下 = 初始SOC）
     energy_balance_error_kwh: float = 0.0  # 能量守恒残差 kWh（应≈0）
     dr_revenue_yuan: float = 0.0           # 需求响应补贴 元
     soc_violation_steps: int = 0           # SOC越界步数（正确实现下应为0）
     degradation_in_objective_yuan: float = 0.0  # 优化目标中实际计入的衰减成本
-    # 🔴#5 新增：求解质量字段（透传到前端显著标注，杜绝"静默垃圾解"）
+    # 求解质量字段（透传到前端显著标注，杜绝"静默垃圾解"）
     time_limit_hit: bool = False           # 是否命中求解时限（得到的是次优解）
     mip_gap_pct: float = 0.0               # 求解时的相对最优间隙容差（%）
 
@@ -197,7 +197,7 @@ class StorageOptimizationAgent:
         # 4.5 需求响应约束
         if dr_signal is not None:
             start_idx, end_idx = dr_signal["start_idx"], dr_signal["end_idx"]
-            # 🟡#30 修复：DR 硬约束加可行性兜底——目标削减超过额定功率时整个 MILP 会
+            # DR 硬约束加可行性兜底——目标削减超过额定功率时整个 MILP 会
             # Infeasible 且上层从不检查。此处把要求钳到 pmax（留 0.1% 余量防数值边界），
             # 并记录告警，让"目标物理上做不到"显性化而不是把求解器逼死。
             dr_req_kw = float(dr_signal["target_reduction_kw"]) * 0.8
@@ -209,10 +209,10 @@ class StorageOptimizationAgent:
                 prob += P_discharge[t] >= dr_req_kw
 
         # ========== 5. 求解 ==========
-        # 优先 HiGHS（比 CBC 快一个量级），不可用时回退 CBC（回退必打 WARNING，🟠#16）
+        # 优先 HiGHS（比 CBC 快一个量级），不可用时回退 CBC（回退必打 WARNING）
         status, solver_status, time_limit_hit = self._solve(prob, time_limit_s, mip_gap)
 
-        # 🔴#5 修复：求解状态必须校验，杜绝"静默产出垃圾解"。
+        # 求解状态必须校验，杜绝"静默产出垃圾解"。
         # Infeasible 时解不存在——此前 pulp.value() 返回 None 直接构造 object 数组，
         # np.clip 抛错或静默失真。现在显式抛错并携带可读信息。
         if solver_status == "Infeasible":
@@ -241,7 +241,7 @@ class StorageOptimizationAgent:
         # ========== 6. 提取结果 ==========
         charge_power = np.array([pulp.value(P_charge[t]) or 0.0 for t in range(n)])
         discharge_power = np.array([pulp.value(P_discharge[t]) or 0.0 for t in range(n)])
-        # 🔴#5 修复：此行原本是全函数唯一没写 `or 0.0` 的提取——求解异常时 value() 返回
+        # 此行原本是全函数唯一没写 `or 0.0` 的提取——求解异常时 value() 返回
         # None，np.array 得到 object 数组，后续 np.clip 抛错或静默失真
         soc_values = np.array([pulp.value(SOC[t]) or 0.0 for t in range(n + 1)])
 
@@ -316,7 +316,7 @@ class StorageOptimizationAgent:
         mip_gap：相对最优间隙容差。日调度场景 0.5% 的收益误差完全可接受，
         但能把求解时间从分钟级压到秒级。
 
-        🟠#16 修复：HiGHS 依赖（highspy）此前未声明，抛异常被 except 静默吞掉，
+        HiGHS 依赖（highspy）此前未声明，抛异常被 except 静默吞掉，
         每次都回退 CBC 而"快一个量级"从未生效。现在回退必打 WARNING 日志。
         """
         time_limit_hit = False
@@ -329,7 +329,7 @@ class StorageOptimizationAgent:
                     time_limit_hit = True  # 命中时限拿到可行解（非最优证明）
                 return status, status_str, time_limit_hit
         except Exception:
-            # 🟠#16：回退必须可见——依赖未装/求解器崩溃不能无痕吞掉
+            # 回退必须可见——依赖未装/求解器崩溃不能无痕吞掉
             _log.warning("HiGHS 求解不可用，回退 CBC（pip install highspy 可启用高速求解器）",
                          exc_info=True)
         try:
@@ -425,7 +425,7 @@ class StorageOptimizationAgent:
         if not bounds:
             bounds = all_bounds
         K = len(bounds)
-        # 🟠#29 修复：big-M 原来取 rated_capacity_kwh=2000，但这两组约束的值域远小于此：
+        # big-M 原来取 rated_capacity_kwh=2000，但这两组约束的值域远小于此：
         #   - mid ∈ [soc_min, soc_max]，mid>=lo-M(1-z) 只需 M ≥ lo-soc_min（≤ 区间宽度）
         #   - thr_k ≤ M·z 只需 M ≥ 单步最大吞吐（pmax·dt·(ηc+1/ηd) ≈ 500）
         # M=2000 使 LP 松弛极弱 → 界差大、分支多，是 864 个二进制逼近 120s 时限的
@@ -471,7 +471,7 @@ class StorageOptimizationAgent:
         return soc, violations
 
     # ------------------------------------------------------------------ #
-    #  基准策略（v1.1 重写：谷段充满 + 尖峰放完，严格能量守恒）
+    #  基准策略（重写：谷段充满 + 尖峰放完，严格能量守恒）
     # ------------------------------------------------------------------ #
     def baseline_strategy(
         self,
@@ -483,12 +483,12 @@ class StorageOptimizationAgent:
         """
         基准策略：谷段充满、尖峰放完（运维现场最常见的手动策略）
 
-        v1.1 修复：
-        - 原实现用"电价75分位"选放电时段，导致只用了 1.05 峰价、完全放过 1.35 尖峰价，
-          是个稻草人；改为显式取电价最低档充电、最高档放电。
-        - 原实现充放电量算多 10%~15% 后用 np.clip 强行截断，能量账不平；
-          改为逐步计算可用余量，SOC 天然不越界。
-        - 支持终值 SOC 约束，与优化策略同一口径比较。
+        两条容易做错的地方：
+        - 用"电价 75 分位"选放电时段是个稻草人 —— 它只吃到 1.05 的峰价，把 1.35
+          的尖峰档整个放过；这里显式取最低档充、最高档放。
+        - 充放电量先算多 10%~15% 再用 np.clip 截断，能量账不平；改为逐步计算可用
+          余量，SOC 天然不越界。
+        - 与优化策略同口径（含终值 SOC 约束），否则比较的是两套假设。
         """
         n = self.battery_cfg.num_steps
         dt = self.battery_cfg.time_step_hours

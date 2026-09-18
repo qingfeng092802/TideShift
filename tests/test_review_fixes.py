@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""代码审查报告 P0/P1 修复回归测试（2.4.3-fix21）
+"""后端安全与健壮性修复的回归测试
 
-覆盖：bootstrap version 字段（P0-F1）、静态文件扩展名白名单（P0-B2）、
-JWT UA 指纹绑定（P0-F2）、统一 DELETE 通道后端语义（P0-F3 服务端侧不变）、
-登录限流字典 LRU 上限（P0-B1）、HSTS/CSP 响应头（P0-B3）、
-DR 业务范围校验（P1-B2）、上传临时文件链路（P1-B1）。
+覆盖：bootstrap version 字段、静态文件扩展名白名单、
+JWT UA 指纹绑定、统一 DELETE 通道后端语义（服务端侧不变）、
+登录限流字典 LRU 上限、HSTS/CSP 响应头、
+DR 业务范围校验、上传临时文件链路。
 不触发 MILP 求解——全部秒级。
 """
 import io
@@ -38,7 +38,7 @@ def _auth_headers(client):
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-# ---------- P0-F1：版本号单一事实来源 ----------
+# ---------- 版本号单一事实来源 ----------
 def test_bootstrap_contains_version(client):
     r = client.get("/api/bootstrap", headers=_auth_headers(client))
     assert r.status_code == 200
@@ -46,7 +46,7 @@ def test_bootstrap_contains_version(client):
     assert r.json()["version"] == __version__
 
 
-# ---------- P0-B2：静态文件扩展名白名单 ----------
+# ---------- 静态文件扩展名白名单 ----------
 def test_static_serves_index(client):
     r = client.get("/")
     assert r.status_code == 200
@@ -61,7 +61,7 @@ def test_static_blocks_non_whitelisted_extension(client):
     assert r2.status_code == 403
 
 
-# ---------- P0-B3：HSTS / CSP 响应头 ----------
+# ---------- HSTS / CSP 响应头 ----------
 def test_security_headers_present(client):
     r = client.get("/")
     assert r.headers.get("strict-transport-security") == "max-age=31536000; includeSubDomains"
@@ -70,7 +70,7 @@ def test_security_headers_present(client):
     assert "cdn.jsdelivr.net" not in csp  # vendor 已本地化，CSP 不再放行外部 CDN
 
 
-# ---------- P0-F2：JWT 绑定 UA 指纹 ----------
+# ---------- JWT 绑定 UA 指纹 ----------
 def test_token_bound_to_user_agent(client):
     tok = _login(client).json()["token"]
     # 同一 UA（TestClient 默认 testclient）→ 放行
@@ -82,7 +82,7 @@ def test_token_bound_to_user_agent(client):
     assert stolen.status_code == 401
 
 
-# ---------- P0-B1：登录限流字典 LRU 上限 ----------
+# ---------- 登录限流字典 LRU 上限 ----------
 def test_login_gate_dicts_bounded():
     for i in range(server._LOGIN_MAX_ENTRIES + 500):
         server._login_record_fail(f"1.2.3.4|user{i}")
@@ -92,7 +92,7 @@ def test_login_gate_dicts_bounded():
     server._LOGIN_LOCKED_UNTIL.clear()
 
 
-# ---------- P1-B2：DR 业务范围校验 ----------
+# ---------- DR 业务范围校验 ----------
 def test_dr_trigger_rejects_out_of_range(client):
     h = _auth_headers(client)
     # target 超上限
@@ -114,7 +114,7 @@ def test_dr_trigger_rejects_out_of_range(client):
     server._DEFAULT_SESSION.manual_dr_signals.clear()
 
 
-# ---------- P1-B1：上传走临时文件链路（正常解析 + 超限拒绝） ----------
+# ---------- 上传走临时文件链路（正常解析 + 超限拒绝） ----------
 def _csv_bytes(n_rows=96):
     import pandas as pd
     import numpy as np
@@ -144,7 +144,7 @@ def test_upload_content_length_preflight(client):
     assert r.status_code == 400 and "50MB" in r.json()["msg"]
 
 
-# ---------- P1-B3：数据指纹改 SHA256 ----------
+# ---------- 数据指纹改 SHA256 ----------
 def test_data_fingerprint_sha256():
     import pandas as pd
     df = pd.DataFrame({"a": [1, 2, 3]})

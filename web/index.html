@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>汐储 TideShift · 工商业储能多智能体调度平台</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='9' fill='%230F6E56'/%3E%3Cpath d='M6 22c3-6 5-6 8 0s5 6 8 0 5-6 8 0' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' fill='none'/%3E%3Cpath d='M20 6 13 15h4.5L16 21l7-9h-4.5L20 6z' fill='%23FFE9A8'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/app.css?v=fix30">
-<!-- P1-6：本地 vendor，内网/离线可用；defer：不再阻塞首屏解析（charts.js 只定义函数，真正 init 在 DOMContentLoaded 之后） -->
-<!-- P1-B4：本地 vendor 文件加 SRI 完整性校验——文件被篡改/损坏时浏览器拒绝执行，供应链攻击可感知 -->
+<link rel="stylesheet" href="css/app.css?v=1.0.0">
+<!-- 本地 vendor，内网/离线可用；defer：不再阻塞首屏解析（charts.js 只定义函数，真正 init 在 DOMContentLoaded 之后） -->
+<!-- 本地 vendor 文件加 SRI 完整性校验——文件被篡改/损坏时浏览器拒绝执行，供应链攻击可感知 -->
 <script src="vendor/echarts.min.js" defer integrity="sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR"></script>
 </head>
 <body>
@@ -25,7 +25,7 @@
       </div>
       <div>
         <div class="brand-name">汐储 TideShift</div>
-        <!-- P0-F1：版本号从 /api/bootstrap 动态渲染（app.js boot），单一事实来源，消除发版漂移 -->
+        <!-- 版本号从 /api/bootstrap 动态渲染（app.js boot），单一事实来源，消除发版漂移 -->
         <div class="brand-sub" id="brand-sub">多智能体调度 · LLM 解释层</div>
       </div>
     </div>
@@ -216,10 +216,10 @@
 
 <div id="toasts" role="status" aria-live="polite"></div>
 
-<script src="js/api.js?v=fix30"></script>
-<script src="js/markdown.js?v=fix30"></script>
-<script src="js/charts.js?v=fix30"></script>
-<script src="js/pages.js?v=fix30"></script>
-<script src="js/app.js?v=fix30"></script>
+<script src="js/api.js?v=1.0.0"></script>
+<script src="js/markdown.js?v=1.0.0"></script>
+<script src="js/charts.js?v=1.0.0"></script>
+<script src="js/pages.js?v=1.0.0"></script>
+<script src="js/app.js?v=1.0.0"></script>
 </body>
 </html>

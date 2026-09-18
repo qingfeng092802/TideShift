@@ -66,7 +66,7 @@ class SchedulingState(TypedDict, total=False):
     # 最终报表
     report: DailyReport
 
-    # v1.2：LLM 决策解释层
+    # LLM 决策解释层
     digest: object          # DecisionDigest（llm_explainer，惰性导入避免硬依赖）
     explanation: str
     explanation_source: str
@@ -157,7 +157,7 @@ def load_forecast_node(state: SchedulingState) -> Dict:
             "forecast_result": forecast,
             "load_profile": forecast.forecast_load_kw,
             "feature_importance": {},
-            # 🟠 降级同样上报：此前异常分支不返回 alerts，报表看不出走了降级路径。
+            # 降级同样上报：此前异常分支不返回 alerts，报表看不出走了降级路径。
             "alerts": [f"负荷预测异常，已降级为历史均值预测（{type(e).__name__}）：{str(e)[:120]}"],
         }
 
@@ -215,7 +215,7 @@ def dr_handler_node(state: SchedulingState) -> Dict:
           f"目标削减{dr_signal.target_reduction_kw:.0f}kW")
 
 
-    agent = DemandResponseAgent(active_config())  # 🟠#14：与 MILP 同一配置源（原硬编码全局 CONFIG）
+    agent = DemandResponseAgent(active_config())  # 与 MILP 同一配置源（原硬编码全局 CONFIG）
     base_schedule = state["base_schedule"]
     final_power = state["final_power"].copy()
 
@@ -285,7 +285,7 @@ def finalize_node(state: SchedulingState) -> Dict:
 
     # SOC后处理：物理可行性裁剪
     soc = state.get("current_soc", 0.5)
-    # 🟠#15 修复：此前 np.clip(soc, soc_min, soc_max) 掩盖越界（soc_violation_steps 永远报 0），
+    # 此前 np.clip(soc, soc_min, soc_max) 掩盖越界（soc_violation_steps 永远报 0），
     # 且 ScheduleResult 未传 energy_balance_error_kwh（恒 0.0）→ 自检形同虚设。
     # 现在：裁剪照做（保证物理可行），但统计被钳制的总能量并显式透传。
     soc_violation_steps = 0
@@ -349,8 +349,8 @@ def finalize_node(state: SchedulingState) -> Dict:
         max_battery_temp_c=round(thermal_result["max_temperature_c"], 1),
         equivalent_cycles=round(deg_result.equivalent_cycles, 4),
         solver_status="Final_LangGraph_DR_Adjusted",
-        terminal_soc=round(float(soc), 4),   # v1.2：补上终值SOC，否则解释层会显示成 0.0%
-        # 🟠#15：显式传守恒残差与越界步数（此前默认 0.0 / 0，自检失效）。
+        terminal_soc=round(float(soc), 4),   # 补上终值SOC，否则解释层会显示成 0.0%
+        # 显式传守恒残差与越界步数（此前默认 0.0 / 0，自检失效）。
         # 能量守恒残差 = DR 调整后被 SOC 物理裁剪钳掉的能量（>0 说明 DR 追加响应
         # 一度超出电池物理能力，前端应提示）。
         energy_balance_error_kwh=round(float(clipped_energy_kwh), 4),
@@ -393,7 +393,7 @@ def finalize_node(state: SchedulingState) -> Dict:
 
 def explanation_node(state: SchedulingState) -> Dict:
     """
-    节点6：LLM 决策解释层（v1.2）
+    节点6：LLM 决策解释层
 
     把 finalize 的硬数字压成事实摘要 → 交给 LLM 组织语言 → 回写 report.explanation。
     设计要点：
@@ -584,7 +584,7 @@ class LangGraphCoordinator:
         return final_state["report"]
 
     def get_visualization_data(self) -> Dict:
-        """获取可视化数据（供Streamlit使用）"""
+        """获取可视化数据（供 Web 看板渲染）"""
         if self._last_state is None or "final_schedule" not in self._last_state:
             return {}
 
@@ -601,7 +601,7 @@ class LangGraphCoordinator:
             "battery_temp": state["final_schedule"].battery_temp_c,
             "ambient_temp": state["ambient_temp_profile"],
             "base_schedule": state["base_schedule"],
-            "final_schedule": state["final_schedule"],   # v1.2：给解释层用（含终值SOC/守恒残差）
+            "final_schedule": state["final_schedule"],   # 给解释层用（含终值SOC/守恒残差）
             "dr_responses": state.get("dr_responses", []),
             "feature_importance": state.get("feature_importance", {}),
             "forecast_mape_raw": state["forecast_result"].mape_without_correction if state.get("forecast_result") else 0.0,

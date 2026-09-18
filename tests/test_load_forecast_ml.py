@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""🟠#26/T5：生产默认 ML 预测路径测试（此前 5 个测试文件全部显式 use_ml_forecast=False，
-load_forecast_agent.py 覆盖率仅 28%，恰好掩盖了 🔴#6 的数据泄漏）。
+"""生产默认 ML 预测路径测试（此前 5 个测试文件全部显式 use_ml_forecast=False，
+load_forecast_agent.py 覆盖率仅 28%，恰好掩盖了 的数据泄漏）。
 
-同时验证 🔴#6：预测日不在训练集——MAPE 必须是泛化误差而非训练集拟合误差。
+同时验证 预测日不在训练集——MAPE 必须是泛化误差而非训练集拟合误差。
 """
 import numpy as np
 import pandas as pd
@@ -88,7 +88,7 @@ def test_train_threshold_boundary_is_exact():
 
 
 def test_ml_forecast_leakage_guard():
-    """🔴#6：预测日必须不在训练集内——训练数据被显式剔除预测日。"""
+    """预测日必须不在训练集内——训练数据被显式剔除预测日。"""
     df = _synthetic_history()
     agent = LoadForecastAgent(CONFIG, xgb_params={"n_estimators": 60, "max_depth": 4})
     forecast_date = pd.to_datetime("2024-07-30")
@@ -100,7 +100,7 @@ def test_ml_forecast_leakage_guard():
 
 
 def test_leakage_assertion_fires_when_day_in_training_data():
-    """🔴#6 断言自检：若预测日混入训练数据，防泄漏断言必须触发。"""
+    """断言自检：若预测日混入训练数据，防泄漏断言必须触发。"""
     df = _synthetic_history()
     agent = LoadForecastAgent(CONFIG, xgb_params={"n_estimators": 60, "max_depth": 4})
     # 预训练于完整数据（含预测日）

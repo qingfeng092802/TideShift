@@ -1,4 +1,4 @@
-"""pytest 共享配置（🟠#24/#41）
+"""pytest 共享配置
 
 此前 5 个测试文件各自 sys.path.insert 且测试依赖 CWD。
 conftest.py 统一把项目根加入 sys.path，并确保任意 CWD 下可运行：
@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# 统一工作目录为项目根：消除"测试依赖 CWD"（🟠#41，data_loader 已改为
+# 统一工作目录为项目根：消除"测试依赖 CWD"（data_loader 已改为
 # __file__ 基准，但缓存/日志路径在测试断言中仍可能涉及相对路径）
 os.chdir(PROJECT_ROOT)
 
@@ -29,7 +29,7 @@ os.chdir(PROJECT_ROOT)
 # 「装依赖 → 跑 pytest → 启动服务」路径操作时，服务启动会读到测试生成的随机
 # 口令而跳过 _create_default()，于是 ADMIN_INITIAL_PASSWORD 被**静默忽略**，
 # 任何口令都登录失败。把可变状态整体重定向到临时目录即可根治本类问题。
-#
+
 # conftest.py 先于全部测试模块被导入，因此在模块级设置环境变量是可靠的。
 # ============================================================================
 _TEST_STATE_DIR = tempfile.mkdtemp(prefix="tideshift-test-state-")

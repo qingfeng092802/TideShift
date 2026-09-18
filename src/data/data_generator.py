@@ -18,7 +18,7 @@ def _hour_float(time_idx: pd.DatetimeIndex) -> np.ndarray:
     """
     时间索引 → 小时浮点数。
 
-    v1.1：pandas ≥3.0 下 `DatetimeIndex.hour` 返回 Index 而非 ndarray，
+    pandas ≥3.0 下 `DatetimeIndex.hour` 返回 Index 而非 ndarray，
     与 ndarray 运算时会出问题，这里统一转 float ndarray。
     """
     return np.asarray(time_idx.hour, dtype=float) + np.asarray(time_idx.minute, dtype=float) / 60.0
@@ -117,7 +117,7 @@ def generate_price_profile(time_idx: pd.DatetimeIndex) -> np.ndarray:
     return np.array([price_by_hour(h, p) for h in hours])
 
 
-# P1-15 单一事实来源：时段划分同时供 generate_price_profile、/api/bootstrap 前端下发与一致性测试使用
+# 单一事实来源：时段划分同时供 generate_price_profile、/api/bootstrap 前端下发与一致性测试使用
 PRICE_PERIODS = [
     {"name": "低谷", "cls": "st-ok", "hours": "00:00-07:00",
      "range": [(0, 7)], "price_field": "valley_price"},
@@ -251,7 +251,7 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
 if __name__ == "__main__":
     import os
     os.chdir(Path(__file__).parent.parent.parent)
-    # v1.1：DR 事件统一生成在数据集的**最后一天**，避免事件散落在 30 天里、
+    # DR 事件统一生成在数据集的**最后一天**，避免事件散落在 30 天里、
     # 离线跑某一天时一个事件都命中不到。
     # ⚠️ 需要注意的口径差异：Web 流程**不读取**该 CSV——它的 DR 事件按当前所选
     # 调度日即时生成。而系统默认调度日是可用日期的**中间日**（`server.default_date()`，

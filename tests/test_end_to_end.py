@@ -1,7 +1,7 @@
 """
 端到端测试（pytest）：负荷预测 → 储能调度 → 需求响应 → 报表
 
-v1.1：原来全是 print、无断言。现在校验报表内部一致性与物理可行性。
+原来全是 print、无断言。现在校验报表内部一致性与物理可行性。
 
 运行：
     pytest tests/test_end_to_end.py -v
@@ -20,7 +20,7 @@ from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
 from src.agents.demand_response_agent import DRSignal
 from src.data.data_loader import load_load_data, load_dr_signals
 
-# 🟠#25：全流程跑真实 MILP，单文件分钟级——标记 slow，PR CI 默认跳过（nightly 全量跑）
+# 全流程跑真实 MILP，单文件分钟级——标记 slow，PR CI 默认跳过（nightly 全量跑）
 pytestmark = pytest.mark.slow
 
 CFG = CONFIG

@@ -28,7 +28,7 @@ class ForecastResult:
     physical_correction_applied: bool  # 是否应用了物理修正
     correction_magnitude_kw: float     # 物理修正幅度 kW（96 点绝对值之和）
     mape_without_correction: float = 0.0  # 物理修正前的MAPE（用于计算修正提升）
-    baseline_mape: float = 0.0         # v1.1：朴素基线MAPE（用于判断模型是否真的有用）
+    baseline_mape: float = 0.0         # 朴素基线MAPE（用于判断模型是否真的有用）
     # 降级说明：非空表示本次预测未走 XGBoost 主路径（历史数据不足等），
     # 上层应把它显示为告警，而不是默默展示一组口径不同的数字。
     fallback_reason: str = ""
@@ -73,7 +73,7 @@ class NaiveBaselineForecaster:
     """
     朴素基线：过去 N 天「同时刻」负荷均值，区分工作日/周末。
 
-    v1.1 新增。存在的意义只有一个：**给 XGBoost 一个必须跑赢的对手**。
+    存在的意义只有一个：**给 XGBoost 一个必须跑赢的对手**。
     工商业日负荷的日内周期性极强，这条 3 行的基线往往比复杂模型还准；
     如果一个 XGBoost 跑不赢它，那这个模型就不该上。
     """
@@ -133,9 +133,9 @@ class LoadForecastAgent:
         self._temp_intercept = None   # kW，截距
         self._temp_correction_fitted = False
         self._max_temp_correction = 80.0  # 单点最大修正幅度(kW)，防止过修正
-        self._baseline_mape = 0.0         # v1.1：朴素基线 MAPE（对照用）
+        self._baseline_mape = 0.0         # 朴素基线 MAPE（对照用）
         self._insufficient_data = False   # 历史数据不足以支撑滞后特征时置 True（降级朴素基线）
-        self.exclude_temp_features = False  # v1.1：ablation 开关，去掉温度特征后物理修正才真正起作用
+        self.exclude_temp_features = False  # ablation 开关，去掉温度特征后物理修正才真正起作用
 
     def _create_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -199,7 +199,7 @@ class LoadForecastAgent:
         correction = np.zeros_like(forecast_load)
 
         if mode == "data_driven":
-            # 🟠 修复（静默换口径）：此前条件写的是
+            # 此前条件写的是
             #   `if mode == "data_driven" and self._temp_correction_fitted and slope is not None:`
             # 未拟合时直接掉进下面的 else 分支——即"数据驱动"模式悄悄换成了
             # predict_simple 用的物理公式，修正强度差一个量级且调用方无感知。
@@ -217,7 +217,7 @@ class LoadForecastAgent:
             correction = np.clip(correction, -self._max_temp_correction, self._max_temp_correction)
         else:
             # 物理公式模式（predict_simple 用）
-            # v1.1 修复：原实现额外乘了 0.05，实际修正强度只有 0.2%/℃，
+            # 原实现额外乘了 0.05，实际修正强度只有 0.2%/℃，
             # 是 README 声称的 4~6%/℃ 的 1/20，等于把物理修正关掉了。此处恢复真实系数。
             temp_coeff = self.cfg.load.temp_load_coeff_commercial * 0.6 + \
                          self.cfg.load.temp_load_coeff_industrial * 0.4
@@ -319,7 +319,7 @@ class LoadForecastAgent:
             "rolling_mean_4", "rolling_mean_96", "rolling_std_96",
             "temp", "temp_lag_1", "temp_change",
         ]
-        # v1.1：ablation 开关。XGBoost 吃了温度特征后，"物理修正"就无事可做
+        # ablation 开关。XGBoost 吃了温度特征后，"物理修正"就无事可做
         # （残差与温度相关性≈0 → 数据驱动修正自动归零）。
         # 做消融实验时关掉温度特征，物理修正才有独立贡献，对比才有意义。
         if getattr(self, "exclude_temp_features", False):
@@ -337,7 +337,7 @@ class LoadForecastAgent:
 
         log.info(f"[负荷预测Agent] 训练集: {len(X_train)} 条, 测试集: {len(test_df) if test_df is not None else 0} 条")
 
-        # 🟠 数据量下限：滞后特征（lag_672 = 7 天）会先被 dropna 丢掉 7 天，再扣掉
+        # 数据量下限：滞后特征（lag_672 = 7 天）会先被 dropna 丢掉 7 天，再扣掉
         #    固定 3 天测试集，剩余才用于训练。真实门槛由 required_history_days() 推算
         #    （默认 11 天），不是"8 天"。不足时不 fit，交由 predict() 降级为朴素基线。
         if len(X_train) < MIN_TRAIN_ROWS:
@@ -380,7 +380,7 @@ class LoadForecastAgent:
             rmse = float(np.sqrt(np.mean((y_test - y_pred) ** 2)))
             log.info(f"[负荷预测Agent] 测试集 MAPE: {mape:.2f}%, RMSE: {rmse:.1f} kW")
 
-            # v1.1：与朴素基线对比 —— 跑不赢基线就不该上这个模型
+            # 与朴素基线对比 —— 跑不赢基线就不该上这个模型
             self._baseline_mape = self._evaluate_naive_baseline(historical_data, test_df)
             log.info(f"[负荷预测Agent] 朴素基线(同时刻均值) MAPE: {self._baseline_mape:.2f}%")
             if self._baseline_mape > 0 and mape > self._baseline_mape:
@@ -431,7 +431,7 @@ class LoadForecastAgent:
             ForecastResult
         """
         forecast_dt = pd.to_datetime(forecast_date)
-        # 🔴#6 修复（数据泄漏）：此前在过滤预测日**之前**就 self.train(historical_data)，
+        # 此前在过滤预测日**之前**就 self.train(historical_data)，
         # 而 train() 只取最后 3 天做测试集 → 预测日本身就在 XGBoost 训练集内，
         # 随后又对同一天评估 MAPE——对外展示的是训练集内拟合误差，不是泛化能力。
         # 现在先剔除预测日、再训练，训练与评估严格隔离。
@@ -443,7 +443,7 @@ class LoadForecastAgent:
         if not self.is_trained and not self._insufficient_data:
             self.train(hist)
 
-        # 🟠 降级路径：历史数据不足以训练 XGBoost（真实门槛见 required_history_days()，
+        # 降级路径：历史数据不足以训练 XGBoost（真实门槛见 required_history_days()，
         #    默认 11 天而非早期文档所写的 8 天）时，
         #    显式改用朴素基线（过去 14 天同时刻均值，区分工作日/周末），并且
         #    **不做物理修正**——修正量由训练数据拟合，没有可靠训练集时套用
@@ -594,7 +594,7 @@ class LoadForecastAgent:
             mape = float(np.mean(np.abs((actual_load - forecast_load) / actual_load)) * 100)
             rmse = float(np.sqrt(np.mean((actual_load - forecast_load) ** 2)))
 
-        # v1.1：朴素基线 MAPE（同一天、同一口径）
+        # 朴素基线 MAPE（同一天、同一口径）
         baseline_mape = 0.0
         if actual_load is not None:
             baseline_mape = NaiveBaselineForecaster().evaluate(historical_data, forecast_date)

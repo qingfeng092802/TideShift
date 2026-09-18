@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""服务层：模型供应商凭据配置（P0-02/#23 双前端统一）
+"""服务层：模型供应商凭据配置（凭据读写的唯一入口）
 
-🟠#23 修复：此前 backend/server.py 与 Streamlit app.py 各自实现
-_load_model_config/_save_model_config，且安全改造只做了一半——
-server.py 落盘加密 Key（api_key_enc），app.py 读到密文不解密 →
-用户在 Web 端配置的 Key 在 Streamlit 端静默失效（安全分叉）。
+存在理由：这套读写曾在两个入口各实现一遍，而安全改造只做了一半——
+一边落盘加密（api_key_enc），另一边读到密文不解密，于是用户配好的 Key
+在那里静默失效。凭据逻辑只要复制两份，就必然分叉。
 
-现在两端统一走本模块：写盘必加密、读盘必解密、明文 Key 永不落盘。
+统一走本模块：写盘必加密、读盘必解密、明文 Key 永不落盘。
 """
 import copy
 import json

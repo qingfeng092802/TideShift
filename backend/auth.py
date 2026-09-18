@@ -1,16 +1,16 @@
 """
-P0-02 安全模块（第二批代码审计修复）
+安全模块（第二批代码审计修复）
 - JWT（HS256，标准库手写，无 PyJWT 依赖）：登录会话，默认 12h 过期
 - Fernet（cryptography，venv 已内置）：API Key 落盘加密，config/.api_secret 保管密钥（0600）
 - PBKDF2-HMAC-SHA256（200k 迭代）：登录口令哈希，config/auth.json 存储
 - 账户存储 config/auth.json
 
-🔴#3 修复：首启不再创建 admin/admin123——生成随机强口令打印到控制台（一次性展示），
+首启不再创建 admin/admin123——生成随机强口令打印到控制台（一次性展示），
   可用 ADMIN_INITIAL_PASSWORD 环境变量显式指定；must_change=true 由 server.py
   中间件强制拦截（仅放行登录与改密接口），不再依赖前端自觉。
-🔴#22 修复：verify() 的 hmac.compare_digest 比较前统一 encode 成 bytes——
+verify() 的 hmac.compare_digest 比较前统一 encode 成 bytes——
   str 含非 ASCII（如中文用户名）时 compare_digest 会抛 TypeError 导致 500。
-P0-47 修复：密钥文件生成加 O_EXCL 锁，防首启并发双写互相覆盖。
+密钥文件生成加 O_EXCL 锁，防首启并发双写互相覆盖。
 """
 from src.utils.logger import get_logger
 log = get_logger(__name__)
@@ -141,7 +141,7 @@ def _write_initial_pwd_file(path: str, password: str):
 
 
 def _load_or_create_secret(path: str) -> bytes:
-    """加载（或首次生成）密钥文件。P0-47：O_EXCL 锁防首启并发双写互相覆盖。"""
+    """加载（或首次生成）密钥文件。O_EXCL 锁防首启并发双写互相覆盖。"""
     if os.path.exists(path):
         with open(path, "rb") as f:
             s = f.read().strip()
@@ -277,7 +277,7 @@ def jwt_verify(token: str) -> Optional[dict]:
         return None
 
 
-# P0-F2：token 指纹绑定——JWT 签发时嵌入 User-Agent 指纹（sha256 前 16 hex），
+# token 指纹绑定——JWT 签发时嵌入 User-Agent 指纹（sha256 前 16 hex），
 # 中间件校验请求 UA 与签发时一致。token 被 XSS 窃取后换个浏览器/环境即失效，
 # 显著降低窃取后的可用性（无状态实现，不需要服务端黑名单）。
 def ua_fingerprint(ua: str) -> str:
@@ -391,7 +391,7 @@ class AuthStore:
         return state
 
     def _create_default(self) -> dict:
-        """🔴#3 修复：首启生成随机强口令（或读 ADMIN_INITIAL_PASSWORD），不再使用 admin/admin123。
+        """修复：首启生成随机强口令（或读 ADMIN_INITIAL_PASSWORD），不再使用 admin/admin123。
 
         开源可用性补强：随机口令除了打印到控制台，还会以 0600 写入
         `<配置目录>/INITIAL_PASSWORD.txt`——控制台日志被刷掉/容器里看不到时仍能取到口令；
@@ -437,7 +437,7 @@ class AuthStore:
         return bool(self._state.get("must_change"))
 
     def verify(self, username: str, password: str) -> bool:
-        """🔴#22 修复：compare_digest 前统一 encode 成 bytes。
+        """修复：compare_digest 前统一 encode 成 bytes。
 
         hmac.compare_digest 对含非 ASCII 字符的 str 抛 TypeError
         （实测 compare_digest('管理员','admin') → TypeError），中文用户名登录会 500。

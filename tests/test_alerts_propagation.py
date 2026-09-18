@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""fix30：告警（alerts）透传链路专项测试。
+"""告警（alerts）透传链路专项测试。
 
 背景：`web/js/pages.js` 的告警警示条读的是 `/api/page/dashboard` 的 `d.alerts`，
 而该端点的返回体从未包含 `alerts` 字段 —— 渲染分支恒为假，负荷预测降级、

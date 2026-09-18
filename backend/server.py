@@ -1,11 +1,11 @@
 """
 FastAPI 后端 - 储能调度系统 Web 版
-与原 Streamlit app.py 功能一比一对等：
+对外提供：
   6 页面数据 / MILP 求解（缓存+进度）/ 数据上传 / 供应商配置 / 对话 Agent / AI 解释层 / 导出
 运行:
     python backend/server.py   # http://127.0.0.1:8800
 """
-# 🟠 修复：sys.path 必须在 import src 之前配置。
+# sys.path 必须在 import src 之前配置。
 # 原先这两行在第 23-24 行（import src 之后），导致文档与 start_web.bat 里的
 # 启动命令 `python backend/server.py` 必然抛 ModuleNotFoundError: No module named 'src'
 # —— Python 只把【脚本所在目录】(backend/) 加进 sys.path，不会加 CWD，
@@ -43,7 +43,7 @@ from fastapi import Request
 import copy
 from contextlib import asynccontextmanager
 
-import auth as auth_mod  # P0-02：JWT/Fernet/PBKDF2（backend/auth.py）
+import auth as auth_mod  # JWT / Fernet / PBKDF2 见 backend/auth.py
 
 from src.data.data_loader import load_load_data
 from src.data import upload_adapter as _upload_adapter
@@ -80,7 +80,7 @@ class AppState:
             "xgb_temp_corr": True, "xgb_floor": True, "xgb_recursive": True,
         }
         self.custom_data: Optional[pd.DataFrame] = None
-        # 🟠 占位值：真实默认日由 default_date() 从当前数据推导后覆盖（见 _get_or_create_session）。
+        # 占位值：真实默认日由 default_date() 从当前数据推导后覆盖（见 _get_or_create_session）。
         # 不再预置 "2024-07-15"，避免任何遗漏路径把它当成合法日期使用。
         self.selected_date = ""
         self.manual_dr_signals: list = []
@@ -96,7 +96,7 @@ class AppState:
         self.pe_cache_key = None
         self.pe_report = None
         self.pe_viz = None
-        # --- 求解缓存（内存注册表 + 磁盘 pkl；🟠#19：内存/磁盘均设上限防无界膨胀） ---
+        # --- 求解缓存（内存注册表 + 磁盘 pkl；内存/磁盘均设上限防无界膨胀） ---
         self._SOLVED_KEYS: set = set()
         self._SOLVE_DISK_DIR = os.path.join(ROOT, ".solve_cache")
         self.solve_thread: Optional[threading.Thread] = None
@@ -121,7 +121,7 @@ class AppState:
     def default_date(self) -> str:
         """默认调度日：一律从当前生效数据的真实日期推导。
 
-        🟠 修复：此前无上传数据时直接 return "2024-07-15"（注释写着"2024-07-08..28
+        此前无上传数据时直接 return "2024-07-15"（注释写着"2024-07-08..28
         的 index 7"），与内置 CSV 的真实范围脱钩——一旦内置数据换成别的日期区间
         （部署真实计量数据时的常规动作），该默认日不存在于数据中，切片得到空
         day_data，页面拿不到任何结果（前端表现为白屏）。
@@ -131,7 +131,7 @@ class AppState:
             return ""
         return dates[-1] if len(dates) <= 7 else dates[(len(dates) - 1) // 2]
 
-    # ---------- 供应商配置（🟠#23：与 app.py 统一走 src/services 共享服务层） ----------
+    # ---------- 供应商配置（统一走 src/services 共享服务层） ----------
     def _model_config_path(self):
         return os.path.join(ROOT, "config", "model_providers.json")
 
@@ -141,7 +141,7 @@ class AppState:
         return state
 
     def save_model_config(self):
-        # P0-02：API Key 永不明文落盘——共享服务层以 api_key_enc（Fernet）写入
+        # API Key 永不明文落盘——共享服务层以 api_key_enc（Fernet）写入
         model_config_service.save_model_config(self._model_config_path(), self.mp_state)
         self._sync_llm_credentials(self.mp_state)
 
@@ -149,7 +149,7 @@ class AppState:
     def _sync_llm_credentials(state: dict):
         """把当前激活 provider 的凭据注入解释层默认值。
 
-        🔴 修复：LangGraph 的 explanation_node 以 `LLMExplainer()` 无参构造，只认
+        LangGraph 的 explanation_node 以 `LLMExplainer()` 无参构造，只认
         环境变量回退；Web 界面配置的 Key 此前只对对话 Agent 生效，而调度流程内嵌的
         「LLM 决策解释」始终降级规则模板（日志长期 source=rule）。同步后两条链路
         共用同一凭据；对话 Agent 仍走 active_llm()，行为不变。
@@ -188,7 +188,7 @@ class AppState:
         self.pe_report = self.pe_viz = None
 
 
-# ================= 会话隔离（🔴#4 修复） =================
+# ================= 会话隔离 =================
 # 此前进程级全局单例承载全部会话状态：A 用户上传数据会改掉所有人视图、
 # B 能看到 A 的聊天记录、且无法多 worker 部署。
 # 现在：按 JWT sub 拆分 AppState，TTL 淘汰 + 数量上限，未认证上下文回退默认会话。
@@ -253,10 +253,10 @@ STAGE_MAP = {
 def _default_price_by_hour(h):
     """默认分时电价（元/kWh）——委托 src.data.upload_adapter 单一事实来源。
 
-    🟠 修复：此前本函数自行硬编码时段划分，与 PRICE_PERIODS（前端时段图例所用）
+    此前本函数自行硬编码时段划分，与 PRICE_PERIODS（前端时段图例所用）
     不一致：24 小时中 11 小时档位不同、日均价差 23%；且该曲线含 6 小时连续同价
-    区间使 MILP 最优解大量退化（实测 7.2s → 120s 撞满时限）。已与 app.py 收敛为
-    同一实现。
+    区间使 MILP 最优解大量退化（实测 7.2s → 120s 撞满时限）。时段口径的唯一实现是
+    `src/data/upload_adapter.py::PRICE_PERIODS`。
     """
     return _upload_adapter.default_price_by_hour(h)
 
@@ -264,7 +264,7 @@ def _default_price_by_hour(h):
 def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
     """把上传文件适配为内部标准格式（实现见 src/data/upload_adapter.py，双前端共用）。
 
-    🟠 修复：此前此处直接 `return raw_df` 原样透传，而下游校验要求内部字段名
+    此前此处直接 `return raw_df` 原样透传，而下游校验要求内部字段名
     price_yuan_per_kwh / ambient_temp_c，文档与前端却告诉用户用 price / temp，
     按文档上传必然报「缺少必要列」。现统一做列名归一化并按需补全。
     """
@@ -273,7 +273,7 @@ def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
 
 # ================= 缓存键与求解（= 原 _current_cache_key/_cached_solve） =================
 def _data_fingerprint(_df: pd.DataFrame) -> str:
-    """🟠#12 修复：改用 pandas 内容哈希。
+    """修复：改用 pandas 内容哈希。
 
     原指纹只含行数+首末时间戳+电价和+温度和——负荷不同但其余相同的数据会命中
     同一缓存键；异常分支用 id()（对象回收后可复用 → 跨数据集缓存碰撞）。
@@ -281,12 +281,13 @@ def _data_fingerprint(_df: pd.DataFrame) -> str:
     """
     content_hash = pd.util.hash_pandas_object(_df, index=False).sum()
     fp = f"{len(_df)}|{content_hash}"
-    # P1-B3 修复：MD5→SHA256（截 128 bit）——缓存键不要求密码学强度，
+    # MD5→SHA256（截 128 bit）——缓存键不要求密码学强度，
     # 但 MD5 在安全审计/合规检查中必被质疑，且 48 bit 截断空间碰撞概率不可忽视。
     return hashlib.sha256(fp.encode("utf-8")).hexdigest()[:32]
 
 
-# 电价时段划分规则版本：与 app.py 保持一致；调整时段口径时必须 +1。
+# 电价时段划分规则版本：调整时段口径时必须 +1，否则旧缓存会带着新价格被命中。
+# 划分规则本身只在 upload_adapter.PRICE_PERIODS 定义一处。
 PRICE_RULE_VERSION = 2
 
 
@@ -300,7 +301,7 @@ def current_cache_key() -> str:
                    getattr(s, "subsidy_per_kwh", 0), getattr(s, "dr_type", "")))
     raw = "|".join([
         str(_sess().selected_date),
-        # 🟠 电价时段划分规则版本：口径变化必须让旧缓存失效（详见 app.py 同名常量）
+        # 电价时段划分规则版本：口径变化必须让旧缓存失效（规则定义见 upload_adapter.PRICE_PERIODS）
         f"pv{PRICE_RULE_VERSION}",
         str(p["orchestrator"]),
         f"{p['soc_min']}", f"{p['soc_max']}", f"{p['rated_power']}",
@@ -316,11 +317,11 @@ def current_cache_key() -> str:
 
 
 def _load_disk(cache_key):
-    """P0-01 修复：缓存文件带 HMAC-SHA256 签名，篡改/投毒文件验签失败按未命中处理。
-    🟡#35 修复：缓存值从裸 tuple 改为带版本号的 dict（v2），兼容读取旧版 4-tuple。
+    """修复：缓存文件带 HMAC-SHA256 签名，篡改/投毒文件验签失败按未命中处理。
+    缓存值从裸 tuple 改为带版本号的 dict（v2），兼容读取旧版 4-tuple。
 
-    🟠 修复（P0）：补上 app.py 已有、此处缺失的 viz 完整性校验。
-    旧版 _save_disk 落盘的 viz 恒为 None（解包错位），若不加校验，
+    viz 完整性校验：缓存命中路径同样要过一遍，否则残缺的 viz 会一路流到前端。
+    真实故障：_save_disk 落盘的 viz 恒为 None（解包错位），若不加校验，
     start_solve 会把 s.viz=None 当 cache_hit 返回 → /api/page/* 永远 409、
     前端"多次自动重跑失败"（Web 端白屏）。
     """
@@ -347,12 +348,12 @@ def _save_disk(cache_key, obj):
     cache_security.save_signed(_sess()._SOLVE_DISK_DIR, cache_key + ".pkl",
                                {"v": 2, "report": report, "baseline": baseline,
                                 "dr": dr, "viz": viz})
-    # 🟠#19：每次写入后执行 mtime LRU 淘汰（上限 50 个文件 / 1GB）
+    # 每次写入后执行 mtime LRU 淘汰（上限 50 个文件 / 1GB）
     cache_security.enforce_disk_lru(_sess()._SOLVE_DISK_DIR, max_files=50, max_total_mb=1024.0)
 
 
 def _cap_solved_keys(s: "AppState", max_keys: int = 64):
-    """🟠#19：内存缓存键集合加上限，超限按插入序淘汰（防反复调参撑爆内存）。"""
+    """内存缓存键集合加上限，超限按插入序淘汰（防反复调参撑爆内存）。"""
     if len(s._SOLVED_KEYS) > max_keys:
         for k in sorted(s._SOLVED_KEYS)[:len(s._SOLVED_KEYS) - max_keys]:
             s._SOLVED_KEYS.discard(k)
@@ -363,7 +364,7 @@ def cache_available(cache_key) -> bool:
 
 
 class _CachedCoordinator:
-    """磁盘缓存重建的最小协调器（= 原版同款）。"""
+    """磁盘缓存重建用的最小协调器：只把已缓存的 viz 交出去，不重跑 MILP。"""
     def __init__(self, viz):
         self._viz = viz
     def get_visualization_data(self):
@@ -375,7 +376,7 @@ def _do_solve(cache_key: str):
     p = dict(_sess().params)
     _df = _sess().df.copy()
     _date = _sess().selected_date
-    # P0-04：CONFIG frozen 不可变——本线程内注入配置快照，不污染全局，用户间互不干扰
+    # CONFIG frozen 不可变——本线程内注入配置快照，不污染全局，用户间互不干扰
     _solve_cfg = replace(CONFIG, battery=replace(
         CONFIG.battery, soc_min=p["soc_min"] / 100, soc_max=p["soc_max"] / 100,
         rated_power_kw=p["rated_power"]))
@@ -383,7 +384,7 @@ def _do_solve(cache_key: str):
     price_custom = {"peak": p["price_peak"], "high": p["price_high"], "flat": p["price_flat"], "valley": p["price_valley"]}
     price_defaults = {"peak": 1.35, "high": 1.05, "flat": 0.65, "valley": 0.32}
     if any(abs(price_custom[k] - price_defaults[k]) > 1e-6 for k in price_defaults):
-        # 🟠 时段划分仍走 PRICE_PERIODS（SSOT），只替换价格值——此前这里又内联了一份
+        # 时段划分仍走 PRICE_PERIODS（SSOT），只替换价格值——此前这里又内联了一份
         #    时段划分，与内置数据使用的分段不一致。
         from dataclasses import replace as _dc_replace
         _custom_price_cfg = _dc_replace(
@@ -476,7 +477,7 @@ def start_solve(force_recompute: bool = False):
 
     @trace.traced("solve")
     def _worker():
-        # 求解线程不继承 contextvar，显式绑定所属会话（🔴#4）
+        # 求解线程不继承 contextvar，必须显式绑定所属会话，否则 _sess() 会拿到别人的状态
         _CURRENT_SESSION.set(s)
         t0 = time.time()
         try:
@@ -493,7 +494,7 @@ def start_solve(force_recompute: bool = False):
             _log.info("求解完成 key=%s 用时=%.1fs", ck[:8], time.time() - t0)
         except Exception as e:
             import traceback
-            # 🟠#17：异常落盘日志（带堆栈），不再只截断塞内存
+            # 异常落盘日志（带堆栈），不再只截断塞内存
             _log.error("求解失败 key=%s: %s", ck[:8], e, exc_info=True)
             with s.lock:
                 s.progress.update({"running": False, "done": True,
@@ -521,7 +522,7 @@ def hours_of(viz):
 
 
 def report_dict(r) -> dict:
-    # 🔴#5：solver_status/time_limit_hit 透传前端——用户永远知道看到的是最优解还是次优解
+    # solver_status/time_limit_hit 透传前端——用户永远知道看到的是最优解还是次优解
     return {
         "net_revenue_yuan": float(r.net_revenue_yuan),
         "arbitrage_revenue_yuan": float(r.arbitrage_revenue_yuan),
@@ -537,7 +538,7 @@ def report_dict(r) -> dict:
         "energy_balance_error_kwh": float(getattr(r, "energy_balance_error_kwh", 0.0) or 0.0),
         "explanation": str(getattr(r, "explanation", "") or ""),
         "explanation_source": str(getattr(r, "explanation_source", "none") or "none"),
-        # 🟠 此前 alerts 只生成不消费，负荷预测降级等告警在 Web 端完全看不到。
+        # 此前 alerts 只生成不消费，负荷预测降级等告警在 Web 端完全看不到。
         #    现透传给前端，由总览页以警示条呈现。
         "alerts": [str(a) for a in (getattr(r, "alerts", None) or [])],
     }
@@ -573,9 +574,9 @@ def dr_windows() -> list:
 # ================= FastAPI 应用 =================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # P0-B1：启动登录限流记录清理线程（daemon，随进程退出）
+    # 启动登录限流记录清理线程（daemon，随进程退出）
     threading.Thread(target=_login_sweeper_loop, daemon=True, name="login-sweeper").start()
-    # P0-B2：启动时扫描 web 静态目录——若混入敏感文件（.json/.pkl/.py/.env 等）给出显式告警
+    # 启动时扫描 web 静态目录——若混入敏感文件（.json/.pkl/.py/.env 等）给出显式告警
     try:
         _web_dir = os.path.join(ROOT, "web")
         _sensitive = []
@@ -587,7 +588,7 @@ async def lifespan(app: FastAPI):
             _log.warning("web/ 静态目录内发现敏感类型文件（可能被静态挂载暴露）：%s", ", ".join(_sensitive))
     except Exception:
         _log.warning("web 目录安全扫描失败", exc_info=True)
-    # 🟠#38：优雅关闭——SIGTERM 时等待进行中的求解收尾（此前 daemon 线程直接被砍断）
+    # 优雅关闭——SIGTERM 时等待进行中的求解收尾（此前 daemon 线程直接被砍断）
     yield
     for s in _all_sessions():
         t = s.solve_thread
@@ -609,13 +610,13 @@ except auth_mod.AuthConfigError as _auth_cfg_err:
     print("=" * 62, file=sys.stderr)
     raise SystemExit(2)
 
-# P0-02：/api/* 统一 JWT 认证（静态资源与 /api/auth/login、/api/system-info 豁免）
+# /api/* 统一 JWT 认证（静态资源与 /api/auth/login、/api/system-info 豁免）
 _AUTH_EXEMPT = {"/api/auth/login", "/api/system-info"}
-# 🔴#3 修复：must_change=true 期间仅放行改密接口（此前只回传标志不做拦截，默认口令可直调全部 /api/*）
+# must_change=true 期间仅放行改密接口（此前只回传标志不做拦截，默认口令可直调全部 /api/*）
 _MUST_CHANGE_ALLOW = {"/api/auth/change-password"}
 
-# 🟠#37：安全响应头（CSP/XFO/nosniff/Referrer-Policy；HTTPS/HSTS 需反代层配置）
-# P0-B3 修复：补 HSTS——HTTPS 部署时强制浏览器后续走 TLS，防 SSL 降级中间人
+# 安全响应头（CSP/XFO/nosniff/Referrer-Policy；HTTPS/HSTS 需反代层配置）
+# 补 HSTS——HTTPS 部署时强制浏览器后续走 TLS，防 SSL 降级中间人
 # （纯 HTTP 本地部署时浏览器自动忽略该头，无副作用）。
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -630,9 +631,9 @@ _SECURITY_HEADERS = {
                                 "object-src 'none'; base-uri 'self'"),
 }
 
-# 🟠#21：登录限流（IP+账号维度，指数退避锁定）——PBKDF2 20万迭代单次约百毫秒 CPU，
+# 登录限流（IP+账号维度，指数退避锁定）——PBKDF2 20万迭代单次约百毫秒 CPU，
 # 不限流则既可爆破又构成未认证 CPU 放大 DoS
-# P0-B1 修复：两个字典此前无清理机制——攻击者用 1 个 IP + 海量不同 username 打
+# 两个字典此前无清理机制——攻击者用 1 个 IP + 海量不同 username 打
 # /api/auth/login 可把内存灌到 GB 级（OOM DoS）。现在：
 #   1) 条目数上限 _LOGIN_MAX_ENTRIES，超出按插入序淘汰最旧项；
 #   2) 后台 sweeper 线程每 5 分钟清理已过期（locked_until < now）的锁定记录。
@@ -666,7 +667,7 @@ def _login_record_fail(key: str):
             lock_s = min(_LOGIN_BASE_LOCK_S * (2 ** (fails - _LOGIN_MAX_FAILS)), _LOGIN_MAX_LOCK_S)
             _LOGIN_LOCKED_UNTIL[key] = time.time() + lock_s
             _log.warning("登录失败过多，已锁定 %ss：ip/账号=%s（第 %d 次失败）", lock_s, key, fails)
-        # P0-B1：条目数超限时按插入序淘汰最旧项（dict 保留插入序）
+        # 条目数超限时按插入序淘汰最旧项（dict 保留插入序）
         while len(_LOGIN_FAILS) > _LOGIN_MAX_ENTRIES:
             _LOGIN_FAILS.pop(next(iter(_LOGIN_FAILS)))
         while len(_LOGIN_LOCKED_UNTIL) > _LOGIN_MAX_ENTRIES:
@@ -674,7 +675,7 @@ def _login_record_fail(key: str):
 
 
 def _login_sweeper_loop():
-    """P0-B1：后台线程每 5 分钟清理已过期的锁定/失败计数记录，长期运行防内存缓慢累积。"""
+    """后台线程每 5 分钟清理已过期的锁定/失败计数记录，长期运行防内存缓慢累积。"""
     while True:
         time.sleep(300)
         now = time.time()
@@ -700,16 +701,16 @@ async def _jwt_auth_middleware(request: Request, call_next):
         payload = auth_mod.jwt_verify(token)
         if payload is None:
             return JSONResponse({"detail": "未登录或会话已过期，请重新登录"}, status_code=401)
-        # P0-F2：token 指纹校验——签发时绑定了 UA 指纹的 token，换浏览器环境后失效
+        # token 指纹校验——签发时绑定了 UA 指纹的 token，换浏览器环境后失效
         # （旧版无 ua_fp 字段的 token 兼容放行，自然过期淘汰）
         fp = payload.get("ua_fp")
         if fp and fp != auth_mod.ua_fingerprint(request.headers.get("user-agent", "")):
             return JSONResponse({"detail": "登录环境已变化，请重新登录"}, status_code=401)
         sub = payload.get("sub", "")
         request.state.user = sub
-        # 🔴#4：按用户注入会话上下文（端点内 _sess() 取到本用户独立状态）
+        # 按用户注入会话上下文（端点内 _sess() 取到本用户独立状态）
         _CURRENT_SESSION.set(_get_or_create_session(sub))
-        # 🔴#3：must_change 强制拦截——未改初始口令前只允许改密接口
+        # must_change 强制拦截——未改初始口令前只允许改密接口
         if AUTH.must_change() and path not in _MUST_CHANGE_ALLOW:
             return JSONResponse({"detail": "首次登录请先修改初始口令", "must_change": True},
                                 status_code=403)
@@ -720,7 +721,7 @@ async def _jwt_auth_middleware(request: Request, call_next):
 
 
 def _engine_config() -> dict:
-    """引擎侧真实参数（P1-14/P1-15）：前端热参数与电价时段展示的唯一数据源。"""
+    """引擎侧真实参数：前端热参数与电价时段展示的唯一数据源。"""
     from src.data.data_generator import PRICE_PERIODS
     b = active_config().battery
     pr = active_config().price
@@ -744,7 +745,7 @@ def _engine_config() -> dict:
 @app.get("/api/bootstrap")
 def bootstrap():
     p = _sess().params
-    # 🟠 修复：日期候选一律来自当前生效数据，不再对内置数据硬编码 2024-07-08~28
+    # 日期候选一律来自当前生效数据，不再对内置数据硬编码 2024-07-08~28
     #    （硬编码会把数据里真实存在的 07-01~07-07 / 07-29~07-30 静默隐藏，
     #     且换数据后默认日可能落在范围外 → 空 day_data → 页面白屏）。
     dates = _sess().available_dates()
@@ -768,9 +769,9 @@ def bootstrap():
             "cache_available": cache_available(ck),
             "orchestrator": p["orchestrator"],
             "dr_overlap_warning": _sess().dr_overlap_warning,
-            # P0-F1：版本号单一事实来源——前端侧栏版本从此字段动态渲染，消除硬编码漂移
+            # 版本号单一事实来源——前端侧栏版本从此字段动态渲染，消除硬编码漂移
             "version": __version__,
-            # P1-14/P1-15：引擎参数唯一事实来源，前端展示一律从此读取，禁止硬编码
+            # -15：引擎参数唯一事实来源，前端展示一律从此读取，禁止硬编码
             "engine_config": _engine_config(),
         }
 
@@ -805,7 +806,7 @@ def page_dashboard():
     b_net = base.arbitrage_revenue_yuan - base.degradation_cost_yuan
     r_net = rep.arbitrage_revenue_yuan - rep.degradation_cost_yuan
     rev_imp = (r_net - b_net) / abs(b_net) * 100 if abs(b_net) > 0.01 else 0
-    # 🟡#31：全平电价时 base.arbitrage_revenue_yuan=0 会 ZeroDivisionError → 500（与下方 bv==0 保护不一致）
+    # 全平电价时 base.arbitrage_revenue_yuan=0 会 ZeroDivisionError → 500（与下方 bv==0 保护不一致）
     arb_imp = ((rep.arbitrage_revenue_yuan - base.arbitrage_revenue_yuan) / base.arbitrage_revenue_yuan * 100
                if abs(base.arbitrage_revenue_yuan) > 1e-9 else 0.0)
     comp_data = [
@@ -832,7 +833,7 @@ def page_dashboard():
         comp_rows.append({"name": name, "base": fmt(bv), "opt": fmt(ov),
                           "imp": round(imp, 1), "status": status})
     annual_arb = rep.arbitrage_revenue_yuan * 365 / 10000
-    # 🟡#43：DR 补贴年化系数 50 = 每周有效 DR 事件 ≈ 50 次的显式假设（原为凭空的魔法数）
+    # DR 补贴年化系数 50 = 每周有效 DR 事件 ≈ 50 次的显式假设（原为凭空的魔法数）
     annual_dr = rep.dr_subsidy_yuan * 50 / 10000
     annual_deg = rep.degradation_cost_yuan * 365 / 10000
     return {
@@ -850,7 +851,7 @@ def page_dashboard():
         "comp_rows": comp_rows,
         "annual": {"arb": round(annual_arb, 1), "dr": round(annual_dr, 1),
                    "deg": round(annual_deg, 1), "net": round(annual_arb + annual_dr - annual_deg, 1)},
-        # 🔴fix30：此前本端点未返回 alerts，而 web/js/pages.js 的告警警示条读的正是
+        # 此前本端点未返回 alerts，而 web/js/pages.js 的告警警示条读的正是
         #   d.alerts —— 字段缺失导致该渲染分支恒为假，负荷预测降级 / 温度超限
         #   等告警在「数据总览」页永远不显示（渲染代码成了死代码）。
         #   现与 /api/page/thermal 的 report_dict() 保持同构透传。
@@ -873,12 +874,12 @@ def page_scheduling():
     discharge_total = float(np.sum(viz["discharge_power"])) * 0.25
     soc_start = float(viz["soc"][0])
     soc_end = float(viz["soc"][-1])
-    # 🟡#43：SOC 能量折算取引擎实际配置的额定容量（原硬编码 2000kWh，改参数后失真）
+    # SOC 能量折算取引擎实际配置的额定容量（原硬编码 2000kWh，改参数后失真）
     _rated_cap = active_config().battery.rated_capacity_kwh
     delta_soc_energy = (soc_start - soc_end) * _rated_cap
     effective_charge = charge_total + max(0, delta_soc_energy)
     rt_eff = min(discharge_total / effective_charge * 100 if effective_charge > 0 else 0, 100.0)
-    # 🟡#31：零除保护（全平电价时 base 套利收益为 0）
+    # 零除保护（全平电价时 base 套利收益为 0）
     arb_imp = ((rep.arbitrage_revenue_yuan - base.arbitrage_revenue_yuan) / base.arbitrage_revenue_yuan * 100
                if abs(base.arbitrage_revenue_yuan) > 1e-9 else 0.0)
     prices = [
@@ -903,9 +904,9 @@ def page_scheduling():
 
 
 def _compute_pure_econ():
-    """🟠#20：thermal 页的纯经济口径需要跑第二次完整 MILP（同步，最长 120s）。
+    """thermal 页的纯经济口径需要跑第二次完整 MILP（同步，最长 120s）。
     加 single-flight 锁：并发请求共享同一次计算（后到者等锁后直接命中缓存），
-    且参数/结果读写全部持锁，消除写竞争。完整异步化（后台任务+轮询）见报告阶段3建议。
+    且参数/结果读写全部持锁，消除写竞争。完整异步化（后台任务 + 轮询）尚未做。
     P1-#20 收尾：结果落磁盘缓存（v2 dict 格式，复用 cache_security 签名通道）——
     服务重启后同参数免重算 120s MILP；缓存键含数据指纹，换数据不碰撞。"""
     p = _sess().params
@@ -954,7 +955,7 @@ def page_thermal():
         return JSONResponse({"need_solve": True}, status_code=409)
     _compute_pure_econ()
     rep, viz = _sess().report, _sess().viz
-    # 🟡#43：58 = 96 点中的 14:30 时刻（58/4=14.5h），原为无注释魔法数
+    # 58 = 96 点中的 14:30 时刻（58/4=14.5h），原为无注释魔法数
     cur_idx = min(58, len(viz["soc"]) - 1)
     from src.models.battery_thermal_model import estimate_temperature_rise
     reject_temp = estimate_temperature_rise(power_kw=800, duration_hours=1.0,
@@ -978,7 +979,7 @@ def page_thermal():
                              "action": f"要求放电{target_kw:.0f}kW",
                              "thermal": f"❌ 驳回（预计超温{dr.max_temp_during_dr_c:.1f}℃）",
                              "status": "拒绝", "net": "0元"})
-    # 🟠#13 修复：删除硬编码虚构日志"15:45 削峰响应 800kW 驳回"——默认 DR 事件中
+    # 删除硬编码虚构日志"15:45 削峰响应 800kW 驳回"——默认 DR 事件中
     # 并不存在该事件，此前无条件混进生产返回值且前端无标注，属于展示编造内容。
     # 热安全"预驳回"评估保留为独立字段，前端可按需展示。
     return {
@@ -1067,7 +1068,7 @@ def page_forecast():
     if load_act is not None and not np.array_equal(load_act, load_fc) and np.all(load_act != 0):
         errors = np.clip(np.abs(load_fc - load_act) / load_act * 100, 0, 20)
     else:
-        # 🟠#13 修复：无实际负荷时不再编造"预测误差直方图"冒充真实数据——
+        # 无实际负荷时不再编造"预测误差直方图"冒充真实数据——
         # 改为返回空直方图并显式标注 synthetic=true，前端打"示例数据"角标
         synthetic = True
         errors = np.zeros(96)
@@ -1090,7 +1091,7 @@ def page_forecast():
         "has_actual": load_act is not None and not np.array_equal(load_act, load_fc),
         "feature_importance": fi,
         "error_hist": hist,
-        "error_hist_synthetic": synthetic,  # 🟠#13：true=无实际数据，直方图为空（前端显示"暂无数据"）
+        "error_hist_synthetic": synthetic,  # true=无实际数据，直方图为空（前端显示"暂无数据"）
         "weekday_profile": {"hours": h96, "weekday": wd_vals, "weekend": we_vals},
     }
 
@@ -1102,14 +1103,14 @@ _UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024  # 50MB
 @app.post("/api/upload")
 async def upload(request: Request, file: UploadFile = File(...)):
     try:
-        # P1-05 输入校验：50MB 上限 / 最少 96 点 / 时间连续 / 数值范围
-        # 🔴#9 修复：此前先 await file.read() 全量读入内存再判 50MB——Starlette 超 1MB
+        # 输入校验：50MB 上限 / 最少 96 点 / 时间连续 / 数值范围
+        # 此前先 await file.read() 全量读入内存再判 50MB——Starlette 超 1MB
         # 先落盘 temp，任意大 body 可同时打爆内存与磁盘。现在：
         #   1) Content-Length 预判直接拒绝；2) 分块流式读取，累计超限即断。
         _cl = request.headers.get("content-length")
         if _cl and _cl.isdigit() and int(_cl) > _UPLOAD_LIMIT_BYTES:
             return JSONResponse({"ok": False, "msg": "文件超过 50MB 上限"}, status_code=400)
-        # P1-B1 修复：分块写入临时文件 + pd.read_csv(path) 流式解析——
+        # 分块写入临时文件 + pd.read_csv(path) 流式解析——
         # 此前 b"".join(chunks) 把 50MB 全量拼进内存（峰值 ~100MB），低配设备并发上传可 OOM。
         # 现在内存峰值只有单块 1MB 缓冲区，与文件大小无关；退出时无条件清理临时文件。
         _tmp_path = None
@@ -1173,7 +1174,7 @@ def clear_upload():
         _sess().custom_data = None
         _sess().clear_solve_state()
         _sess().selected_date = _sess().default_date()
-    # P1-B5：显式触发垃圾回收——pandas 大 DataFrame 引用计数归零后可能不立即归还 OS，
+    # 显式触发垃圾回收——pandas 大 DataFrame 引用计数归零后可能不立即归还 OS，
     # 长期运行的"上传-清除"循环会内存碎片化/缓慢增长
     gc.collect()
     return {"ok": True}
@@ -1221,7 +1222,7 @@ def export_plan():
 
 # ---------------- 参数 / 设置 ----------------
 class ParamsReq(BaseModel):
-    # P1-06：Pydantic 字段校验（越界/非法组合在入口即拒，返回 422）
+    # Pydantic 字段校验（越界/非法组合在入口即拒，返回 422）
     @field_validator("soc_min")
     @classmethod
     def _v_soc_min(cls, v):
@@ -1353,20 +1354,20 @@ class DRReq(BaseModel):
     target: float
     subsidy: float
     dr_type: str  # 削峰 / 填谷 / 备用
-    force: bool = False  # P1-07：与已有DR事件重叠时强制叠加
+    force: bool = False  # 与已有DR事件重叠时强制叠加
 
 
 @app.post("/api/dr/trigger")
 def dr_trigger(req: DRReq):
     import re as _re
-    # P1-07：时间格式/顺序校验 + 与已有手动 DR 事件重叠阻断（force=true 强制叠加）
+    # 时间格式/顺序校验 + 与已有手动 DR 事件重叠阻断（force=true 强制叠加）
     for _t in (req.start, req.end):
         if not _re.match(r"^\d{2}:\d{2}$", _t):
             raise HTTPException(400, "时间格式应为 HH:MM（如 08:00）")
     _m = lambda t: int(t[:2]) * 60 + int(t[3:5])
     if _m(req.start) >= _m(req.end):
         raise HTTPException(400, "开始时间必须早于结束时间")
-    # P1-B2 修复：补业务范围校验——此前仅 target>0，target=1e9 / subsidy=9999 /
+    # 补业务范围校验——此前仅 target>0，target=1e9 / subsidy=9999 /
     # 跨 8 小时的超长时段可被 curl 直调绕过前端 min/max，导致求解异常或经济损失。
     if req.target > 10000:
         raise HTTPException(400, "目标削减功率上限 10000 kW")
@@ -1402,7 +1403,7 @@ def dr_trigger(req: DRReq):
 # ---------------- 供应商管理 ----------------
 @app.get("/api/providers")
 def get_providers():
-    # P0-02：API Key 不再回传明文——has_key + api_key_masked 脱敏
+    # API Key 不再回传明文——has_key + api_key_masked 脱敏
     safe = copy.deepcopy(_sess().mp_state)
     for _p in safe.get("providers", []):
         _k = _p.get("api_key", "")
@@ -1418,7 +1419,7 @@ class ProviderSaveReq(BaseModel):
 
 @app.post("/api/providers/save")
 def save_providers(req: ProviderSaveReq):
-    # P0-02：前端脱敏后不回传明文 → api_key 为空的供应商保留原密钥（按 id 匹配）
+    # 前端脱敏后不回传明文 → api_key 为空的供应商保留原密钥（按 id 匹配）
     old_keys = {p.get("id"): p.get("api_key", "") for p in _sess().mp_state.get("providers", [])}
     for p in req.state.get("providers", []):
         p.pop("api_key_masked", None)
@@ -1439,7 +1440,7 @@ def test_provider(req: ProviderTestReq):
     """= 原 _test_llm_connection：最小连通性测试。"""
     provider = req.provider
     stored = next((p.get("api_key", "") for p in _sess().mp_state.get("providers", [])
-                   if p.get("id") == provider.get("id")), "")  # P0-02：脱敏回传时空 Key 回退存储值
+                   if p.get("id") == provider.get("id")), "")  # 脱敏回传时空 Key 回退存储值
     key = provider.get("api_key") or stored or os.getenv("DEEPSEEK_API_KEY", "")
     if not key:
         return {"ok": False, "msg": "未配置 API Key"}
@@ -1447,7 +1448,7 @@ def test_provider(req: ProviderTestReq):
     if not base:
         return {"ok": False, "msg": "Base URL 为空"}
     try:
-        assert_safe_llm_url(base)  # P0-03 SSRF 防护（🟠#11：公共模块 src/utils/url_guard）
+        assert_safe_llm_url(base)  # SSRF 防护（公共模块 src/utils/url_guard）
     except SSRFBlockedError as e:
         return {"ok": False, "msg": str(e)}
     model = provider["models"][0] if provider.get("models") else "deepseek-chat"
@@ -1521,12 +1522,12 @@ def chat(req: ChatReq):
         response = agent.respond(req.message)
     except Exception as e:
         response = f"⚠️ 对话Agent异常：{type(e).__name__}: {e}"
-    # 🟠#19：chat_history 只 append 不裁剪 → 环形上限 200 条（返回窗口仍是最近 16 条）
+    # chat_history 只 append 不裁剪 → 环形上限 200 条（返回窗口仍是最近 16 条）
     s = _sess()
     s.chat_history.append({"role": "assistant", "content": response})
     if len(s.chat_history) > 200:
         del s.chat_history[:-200]
-    # 与原版一致：工具可能重跑调度，同步最新结果（🔴#4：回写纳入会话锁，消除写竞争）
+    # 对话工具可能重跑调度：回写必须在会话锁内，否则并发请求会读到半更新的结果
     if ctx.report is not None and ctx.report is not s.report:
         with s.lock:
             s.coordinator, s.report, s.baseline, s.viz = ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data
@@ -1607,7 +1608,7 @@ def chat_history():
     return {"history": _sess().chat_history[-16:]}
 
 
-# ---------------- 认证（P0-02） ----------------
+# ---------------- 认证 ----------------
 class LoginReq(BaseModel):
     username: str
     password: str
@@ -1615,7 +1616,7 @@ class LoginReq(BaseModel):
 
 @app.post("/api/auth/login")
 def auth_login(req: LoginReq, request: Request):
-    # 🟠#21：IP+账号维度限流与指数退避锁定
+    # IP+账号维度限流与指数退避锁定
     ip = request.client.host if request.client else "unknown"
     gate_key = _login_gate_key(ip, req.username[:64])
     remaining = _login_rate_limited(gate_key)
@@ -1628,7 +1629,7 @@ def auth_login(req: LoginReq, request: Request):
         _login_record_fail(gate_key)
         return JSONResponse({"ok": False, "detail": "用户名或密码错误"}, status_code=401)
     _login_record_success(gate_key)
-    # P0-F2：token 绑定 User-Agent 指纹（sha256 前 16 hex），降低 XSS 窃取后的可用性
+    # token 绑定 User-Agent 指纹（sha256 前 16 hex），降低 XSS 窃取后的可用性
     token = auth_mod.jwt_encode({
         "sub": req.username,
         "ua_fp": auth_mod.ua_fingerprint(request.headers.get("user-agent", "")),
@@ -1688,7 +1689,7 @@ def system_info():
 
 
 # 静态前端
-# P0-B2 修复：显式白名单静态文件扩展名——此前整个 web 目录无条件挂载，一旦部署时
+# 显式白名单静态文件扩展名——此前整个 web 目录无条件挂载，一旦部署时
 # 误将 config/、.solve_cache/ 等敏感目录放入 web/，任意文件可被 GET 拉取。
 # 现在非白名单扩展名一律 403（配合 lifespan 启动扫描告警，默认安全）。
 _STATIC_ALLOWED_EXT = {".html", ".css", ".js", ".map", ".svg", ".png", ".jpg", ".ico",
@@ -1708,7 +1709,7 @@ app.mount("/", _GuardedStaticFiles(directory=os.path.join(os.path.dirname(os.pat
 
 if __name__ == "__main__":
     import uvicorn
-    # 🟡#33：host/port/日志级别改环境变量覆盖，公网部署不再必须改代码
+    # host/port/日志级别改环境变量覆盖，公网部署不再必须改代码
     _host = os.getenv("ENERGY_HOST", "127.0.0.1")
     _port = int(os.getenv("ENERGY_PORT", "8800"))
     _log_level = os.getenv("ENERGY_LOG_LEVEL", "info")

@@ -1,7 +1,7 @@
 """
 核心调度模块测试（pytest）
 
-v1.1：原来这个文件只有 print、没有一条 assert，改坏了代码不会报警。
+原来这个文件只有 print、没有一条 assert，改坏了代码不会报警。
 现在覆盖真正会被问到的性质：能量守恒、SOC 不越界、终值约束、热约束生效、
 优化不劣于基准、SOC 区间加权衰减确实提升决策质量。
 
@@ -22,7 +22,7 @@ from src.utils.config import CONFIG, internal_resistance_from_efficiency
 from src.agents.storage_optimization_agent import StorageOptimizationAgent
 from src.data.data_generator import generate_price_profile, generate_ambient_temp
 
-# 🟠#25：真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
+# 真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
 pytestmark = pytest.mark.slow
 
 CFG = CONFIG
