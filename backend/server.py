@@ -54,6 +54,7 @@ from src.agents.storage_optimization_agent import StorageOptimizationAgent
 from src.agents.demand_response_agent import DRSignal
 from src.agents.chat_agent import create_agent, AgentContext, SchedulingTools
 from src.utils.config import CONFIG
+from src.utils import trace
 from src import __version__
 from src.utils import cache_security
 from src.utils.config import use_config, active_config
@@ -473,6 +474,7 @@ def start_solve(force_recompute: bool = False):
         s.progress.update({"running": True, "percent": 3, "label": "准备调度引擎…",
                            "cache_hit": False, "done": False, "error": "", "warning": ""})
 
+    @trace.traced("solve")
     def _worker():
         # 求解线程不继承 contextvar，显式绑定所属会话（🔴#4）
         _CURRENT_SESSION.set(s)
@@ -1475,6 +1477,7 @@ def test_provider(req: ProviderTestReq):
 
 # ---------------- AI 解释 ----------------
 @app.post("/api/explain")
+@trace.traced("explain")
 def explain():
     if not ensure_solved():
         raise HTTPException(409, "not solved")
@@ -1497,6 +1500,7 @@ class ChatReq(BaseModel):
 
 
 @app.post("/api/chat")
+@trace.traced("chat")
 def chat(req: ChatReq):
     if not ensure_solved():
         raise HTTPException(409, "not solved")
@@ -1508,6 +1512,11 @@ def chat(req: ChatReq):
                        schedule=_sess().viz.get("final_schedule") if isinstance(_sess().viz, dict) else None,
                        llm_api_key=key, llm_base_url=base, llm_model=model)
     agent = create_agent(ctx, api_key=key, base_url=base, model=model)
+    _rt = trace.current_run()
+    if _rt is not None:
+        _rt.attrs.update(mode=getattr(agent, "mode", "unknown"),
+                         date=_sess().selected_date,
+                         question_len=len(req.message or ""))
     try:
         response = agent.respond(req.message)
     except Exception as e:
@@ -1526,6 +1535,7 @@ def chat(req: ChatReq):
 
 
 @app.post("/api/chat/stream")
+@trace.traced("chat_stream")
 async def chat_stream(req: ChatReq):
     """流式对话（SSE）。
 
@@ -1644,6 +1654,26 @@ def auth_change_password(req: ChangePwdReq):
         # env 模式下口令由环境变量托管，应用内改密无意义——给出可执行的改法而不是 500
         raise HTTPException(400, str(e))
     return {"ok": True, "msg": "口令已更新，请使用新口令重新登录"}
+
+
+@app.get("/api/traces")
+def traces(limit: int = 20):
+    """最近若干次运行的追溯摘要（只读、进程内环形）。"""
+    return {"runs": trace.recent(max(1, min(int(limit or 20), 50)))}
+
+
+@app.get("/api/traces/{run_id}")
+def trace_detail(run_id: str):
+    """按 run_id 取一次运行的完整事件序列。
+
+    只在内存环形里查，不把 run_id 当文件名拼路径 —— 那是现成的目录穿越入口。
+    历史运行请直接读 logs/traces/*.jsonl。
+    """
+    rt = trace.find(run_id)
+    if rt is None:
+        raise HTTPException(404, "trace not found (in-memory ring only; "
+                                 "history lives in logs/traces/*.jsonl)")
+    return rt.detail()
 
 
 @app.get("/api/system-info")

@@ -28,6 +28,8 @@ import urllib.request
 from dataclasses import dataclass, field, asdict
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from src.utils import trace
+
 import numpy as np
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
@@ -505,22 +507,32 @@ class LLMExplainer:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"{digest.to_text()}\n\n---\n\n问题：{q}"},
         ]
-        try:
-            answer = self._client(
-                messages=messages,
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model=self.model,
-                temperature=self.temperature,
-                timeout_s=self.timeout_s,
-            )
-        except Exception as e:
-            return ExplanationResult(
-                text=template_explain(digest), source="rule", question=q,
-                error=f"{type(e).__name__}: {str(e)[:200]}",
-            )
-
-        grounding = check_grounding(answer, digest)
+        with trace.span("llm_explain", model=self.model) as sp:
+            try:
+                answer = self._client(
+                    messages=messages,
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    model=self.model,
+                    temperature=self.temperature,
+                    timeout_s=self.timeout_s,
+                )
+            except Exception as e:
+                # 降级要留痕：界面上看到"规则模板"却不知道为什么不走 LLM，
+                # 是这类系统最难查的一类问题。span 状态记 degraded，主流程照旧不抛。
+                if sp is not None:
+                    sp.status = "degraded"
+                    sp.attrs["error_type"] = type(e).__name__
+                return ExplanationResult(
+                    text=template_explain(digest), source="rule", question=q,
+                    error=f"{type(e).__name__}: {str(e)[:200]}",
+                )
+            grounding = check_grounding(answer, digest)
+            if sp is not None:
+                sp.attrs.update(source="llm", answer_len=len(answer or ""),
+                                grounding_checked=grounding.checked,
+                                grounding_grounded=grounding.grounded,
+                                grounding_flagged=len(grounding.unknown))
         if grounding.unknown:
             answer += "\n\n> ⚠️ 以下数字未能在事实摘要中匹配到，请人工核对：" + "、".join(grounding.unknown[:8])
         return ExplanationResult(text=answer, source="llm", question=q, grounding=grounding)

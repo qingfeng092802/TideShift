@@ -70,6 +70,30 @@
 - CLI 报告含 ✅/℃ 等字符，Windows 控制台默认 GBK 会 `UnicodeEncodeError` 直接跑挂；
   `main()` 里把 stdout/stderr 重设为 UTF-8（开发与实测环境即 Windows 10）。
 
+### 新增（Added）—— 2026-09-18 运行追溯（trace）
+
+- **`src/utils/trace.py`**：每次运行（求解 / 对话 / 解释 / 寻优循环）落一行 JSON 到
+  `logs/traces/trace-YYYYMMDD.jsonl`，并进进程内有界环形缓冲。日志答"哪里报错"，
+  trace 答"这一次运行里每步耗时多少、LLM 走了哪条降级路径"。不引 Langfuse / OTel，
+  与项目"完全离线可用"的口径一致。
+- **接入点**：`/api/solve` 后台求解线程、`/api/chat`、`/api/chat/stream`、`/api/explain`、
+  参数寻优 Agent 的每一发求解、解释层的 LLM 调用（含 `status=degraded` 与错误类型）。
+  无活动 run 时 `span()` 完全空转，import 本模块不改变任何既有行为。
+- **只读接口**：`GET /api/traces?limit=20`（摘要，含最慢环节）、
+  `GET /api/traces/{run_id}`（完整事件序列）。均在 JWT 之后；`run_id` 只作内存查询键，
+  **不参与文件路径拼接**（否则就是现成的目录穿越入口，已有用例守着）。
+- **按级脱敏**：`ENERGY_TRACE_LEVEL` 三档。默认 `basic` 只记事件名、耗时、状态与长度计数
+  —— 问题文本会变成 `question_len`；`full` 才连文本一起记（截断 2000 字）。
+  对话里可能出现用户自己上传的负荷数据，默认不落盘。
+- **两个必炸的地方专门测了**（`tests/test_trace.py`，18 项）：
+  ① 活动 run 必须**线程局部**——求解跑在后台线程，用模块级全局会把并发请求的事件
+  混进同一个 run，trace 就成了假证据；② `@trace.traced` 必须用 `functools.wraps`
+  保住签名，否则 FastAPI 注入不了请求模型。另测盘不可用时不拖挂主流程、环形有界、
+  `off` 级彻底静默。
+- 新增环境变量：`ENERGY_TRACE_DIR` / `ENERGY_TRACE_LEVEL` / `ENERGY_TRACE_MAX`，
+  已写入 `.env.example` 与 README 配置项表。
+- 已知未完成项：**看板的追溯页未做**。`/api/traces` 已可 curl，前端页面留给后续。
+
 ### 修复（Fixed）—— 由 evals/ 首轮评测暴露，均有回归用例
 
 - **P0：SOC 参数被截断，系统按错误约束跑真实 MILP**。

@@ -402,6 +402,9 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `ENERGY_CACHE_SECRET_FILE` | `config/.cache_secret` | 缓存 HMAC 签名密钥路径 |
 | `ENERGY_CONFIG_DIR` | `config/` | **认证与密钥落盘目录**（`auth.json` / `.auth_secret` / `.api_secret`）。测试与只读部署用它把可变状态移出代码目录；pytest 会自动指向临时目录 |
 | `LLM_TEST_ALLOW_HOSTS` | 空 | SSRF 白名单逃生口，仅自建 LLM 网关时需要 |
+| `ENERGY_TRACE_DIR` | `logs/traces/` | 运行追溯 JSONL 目录 |
+| `ENERGY_TRACE_LEVEL` | `basic` | `off` 关闭 / `basic` 只记事件名与长度计数（不落用户内容）/ `full` 连文本一起记 |
+| `ENERGY_TRACE_MAX` | `64` | 进程内环形保留的 run 数，决定 `/api/traces` 可见范围 |
 
 **部署到公网前请务必阅读**：本项目面向单机/内网场景设计，公网部署至少需要（1）修改默认管理员口令、（2）配置 HTTPS 反向代理、（3）限制 `config/` 与 `.solve_cache/` 目录的访问权限。
 
@@ -440,7 +443,8 @@ TideShift/
 │       ├── config.py                    # 全局配置 + 热参数自洽校验
 │       ├── cache_security.py            # 求解缓存 HMAC 验签 + 受限反序列化 + LRU
 │       ├── url_guard.py                 # SSRF 防护
-│       └── logger.py                    # 统一日志（RotatingFileHandler）
+│       ├── logger.py                    # 统一日志（RotatingFileHandler）
+│       └── trace.py                     # 运行追溯：JSONL 落盘 + 有界环形 + 按级脱敏
 ├── data/                            # 内置合成演示数据（可直接运行，非真实计量数据）
 │   ├── load/load_data.csv
 │   ├── load/dr_signals.csv          # DR 事件**示例数据**（⚠️ Web 流程不读取，见常见问题）
@@ -562,6 +566,30 @@ SOC 区间衰减系数（深充深放是浅充浅放的 2~3 倍）：
 > 的示例句。修复见 `src/agents/chat_agent.py::_extract_params` 与
 > `tests/test_chat_agent.py::test_param_extraction_from_utterance`。
 
+### 运行追溯（trace）
+
+`src/utils/trace.py`。日志回答"哪里报了错"，trace 回答"**这一次运行**里每一步花了多久、
+LLM 走了哪条路径、哪一步把数字算变了"。没有它，调试 agent 的唯一手段就是重跑一遍再看。
+
+- **载体**：每次运行（一次求解、一轮对话、一次解释、一次寻优循环）落一行 JSON 到
+  `logs/traces/trace-YYYYMMDD.jsonl`，同时进进程内有界环形缓冲供接口实时读。
+  不引 Langfuse / OTel——本项目口径是完全离线可用。
+- **接入点**：`/api/solve` 的后台求解线程、`/api/chat`、`/api/chat/stream`、`/api/explain`、
+  参数寻优 Agent 的每一发求解，以及解释层的 LLM 调用（含降级原因）。
+- **接口**：`GET /api/traces?limit=20` 取摘要（含最慢环节），`GET /api/traces/{run_id}`
+  取完整事件序列。二者都在 JWT 之后；`run_id` 只作内存查询键，**不拼进文件路径**。
+- **默认不落业务内容**。`basic` 级只记事件名/耗时/状态与长度计数（问题文本进 trace 会变成
+  `question_len`），`full` 级才记文本。对话里可能出现用户自己上传的负荷数据，
+  默认不写进磁盘。
+- **两个容易出事的地方有专门测试**：活动 run 是**线程局部**的（求解跑在后台线程，
+  用模块级全局会把并发请求的事件混进同一个 run，trace 就成了假证据）；
+  `@trace.traced` 用 `functools.wraps` 保住签名，否则 FastAPI 注入不了请求模型。
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces?limit=5"
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run_id>"
+```
+
 ## 量化成果
 
 以 1MW/2MWh 工商业磷酸铁锂储能系统、广东工商业峰谷电价、调度日 2024-07-30 为例：
@@ -623,13 +651,13 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **162 项**（快测 131 项 + `slow` 31 项，其中 8 项为 `eval` 标记的 agent 行为评测），
+测试规模 **232 项**（快测 200 项 + `slow` 32 项，其中 8 项为 `eval` 标记的 agent 行为评测），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
 `eval` 那 8 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 154 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+与其余 224 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。
 
@@ -657,6 +685,8 @@ PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触�
 | `test_alerts_propagation.py` | 告警字段端到端透传 |
 | `test_evals.py` | 评测层自身：四维判定的分母口径、打桩是否真的挡住了 MILP、用例文件完整性（30 项，不依赖求解器与网络） |
 | `test_evals_run.py` | 用评测层量 agent：任务成功率、数字保真、副作用守卫、与 `reports/baseline.json` 的回归比对（`eval + slow`） |
+| `test_parameter_search.py` | 寻优 Agent 的四条护栏（越温限不可选、跨分辨率不进结论、预算与时限、噪声不算战果）+ 1 项真实 MILP |
+| `test_trace.py` | trace 的线程隔离、按级脱敏、装饰器签名不变性、`/api/traces` 鉴权与 run_id 不作路径 |
 
 CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
 

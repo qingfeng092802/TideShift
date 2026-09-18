@@ -3,13 +3,13 @@
     "date": "2024-07-30",
     "use_ml_forecast": false,
     "solver_status": "Final_DR_Adjusted",
-    "git_sha": "aa6ef77",
+    "git_sha": "8c25aab",
     "python": "3.13.9",
     "stub_act": true,
     "n_dr_signals": 2,
     "mode": "rule",
-    "generated_at": "2026-09-18 22:34:42",
-    "wall_seconds": 43.6
+    "generated_at": "2026-09-18 23:40:00",
+    "wall_seconds": 40.0
   },
   "metrics": {
     "n_cases": 32,
@@ -24,7 +24,7 @@
     "side_effect_guard_rate": 1.0,
     "side_effect_guard_n": 5,
     "latency_p50_ms": 0.1,
-    "latency_p95_ms": 1.5,
+    "latency_p95_ms": 1.3,
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "by_kind": {
@@ -67,7 +67,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.2271000121254474,
+      "latency_ms": 0.14849999570287764,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -87,7 +87,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.07300000288523734,
+      "latency_ms": 0.06450002547353506,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -107,7 +107,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.04610000178217888,
+      "latency_ms": 0.04619997343979776,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -127,7 +127,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.04490002174861729,
+      "latency_ms": 0.041799998143687844,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -147,7 +147,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.048600020818412304,
+      "latency_ms": 0.041799998143687844,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -167,7 +167,7 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.17690000822767615,
+      "latency_ms": 0.12350000906735659,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 117
@@ -187,7 +187,7 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.09880002471618354,
+      "latency_ms": 0.06750001921318471,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 117
@@ -207,7 +207,7 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.08259998867288232,
+      "latency_ms": 0.0577000027988106,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 117
@@ -227,7 +227,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.05529998452402651,
+      "latency_ms": 0.030499999411404133,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -247,7 +247,7 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.7892999749165028,
+      "latency_ms": 1.5490000077988952,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 151
@@ -267,7 +267,7 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.4976999955251813,
+      "latency_ms": 1.270599983399734,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 151
@@ -287,7 +287,7 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.4220000011846423,
+      "latency_ms": 1.2567999947350472,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 151
@@ -307,7 +307,7 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.4010000159032643,
+      "latency_ms": 1.2467000051401556,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 151
@@ -327,7 +327,7 @@
         "compare_baseline"
       ],
       "failures": [],
-      "latency_ms": 0.058900011936202645,
+      "latency_ms": 0.045599997974932194,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 160
@@ -349,7 +349,7 @@
       "failures": [
         "未调用期望工具 ['compare_baseline']，实际调用 ['get_thermal_info']"
       ],
-      "latency_ms": 0.1351999817416072,
+      "latency_ms": 0.07829998503439128,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 117
@@ -369,7 +369,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.6370999908540398,
+      "latency_ms": 0.5672000115737319,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -389,7 +389,7 @@
         "explain_schedule"
       ],
       "failures": [],
-      "latency_ms": 0.05679999594576657,
+      "latency_ms": 0.05329999839887023,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 69
@@ -409,7 +409,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.23750000400468707,
+      "latency_ms": 0.22570000146515667,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -429,7 +429,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.041799998143687844,
+      "latency_ms": 0.03660001675598323,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -449,7 +449,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.2243000199086964,
+      "latency_ms": 0.2243999915663153,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -469,7 +469,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.41680000140331686,
+      "latency_ms": 0.3026000049430877,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 32
@@ -489,7 +489,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.06220000796020031,
+      "latency_ms": 0.0549999822396785,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 32
@@ -509,7 +509,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.05240002064965665,
+      "latency_ms": 0.04840001929551363,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 37
@@ -529,7 +529,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.051799986977130175,
+      "latency_ms": 0.046600005589425564,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 43
@@ -549,7 +549,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.0604000233579427,
+      "latency_ms": 0.04990000161342323,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 37
@@ -569,7 +569,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.07589999586343765,
+      "latency_ms": 0.05099998088553548,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 49
@@ -587,7 +587,7 @@
       "checks_side_effect": true,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.017999991541728377,
+      "latency_ms": 0.01400001929141581,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 42
@@ -607,7 +607,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.2330999996047467,
+      "latency_ms": 0.22349998471327126,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -627,7 +627,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.2626999921631068,
+      "latency_ms": 0.21670002024620771,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -645,7 +645,7 @@
       "checks_side_effect": true,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.013399985618889332,
+      "latency_ms": 0.012400007108226418,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 121
@@ -665,7 +665,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.05400000372901559,
+      "latency_ms": 0.0371999922208488,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -683,7 +683,7 @@
       "checks_side_effect": false,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.015600002370774746,
+      "latency_ms": 0.009300012607127428,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 130

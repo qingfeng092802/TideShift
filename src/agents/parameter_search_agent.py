@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from src.utils import trace
 from src.utils.config import CONFIG, SystemConfig
 from src.utils.logger import get_logger
 
@@ -608,6 +609,7 @@ class ParameterSearchAgent:
         return reasons
 
     # ---------- 主循环 ----------
+    @trace.traced("param_search")
     def run(self, date: str, historical_data: Any = None,
             dr_signals: Optional[Sequence[Any]] = None) -> SearchReport:
         from src.data.data_loader import load_load_data
@@ -659,7 +661,8 @@ class ParameterSearchAgent:
                             _key(checked))
                 continue
             seen.add(_key(checked))
-            cand = evaluate(checked, self.search_steps)
+            with trace.span("evaluate", resolution=self.search_steps):
+                cand = evaluate(checked, self.search_steps)
             cand.source = getattr(self.proposer, "mode", "heuristic")
             report.candidates.append(cand)
             report.used_steps = step + 1
@@ -714,6 +717,10 @@ class ParameterSearchAgent:
                                 "「朴素基线优先」同一口径。")
         report.notes.extend(_common_notes())
         report.elapsed_s = time.perf_counter() - t0
+        rt = trace.current_run()
+        if rt is not None:
+            rt.attrs.update(candidates=len(report.candidates), used_steps=report.used_steps,
+                             stopped_by=report.stopped_by, agent_won=report.agent_won)
         return report
 
 

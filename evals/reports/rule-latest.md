@@ -2,7 +2,7 @@
 
 - 模式：**rule**（规则路由，离线确定性）
 - 调度日 2024-07-30｜求解器状态 `Final_DR_Adjusted`｜XGBoost 关｜MILP 重跑 打桩
-- 代码 `aa6ef77`｜Python 3.13.9｜生成于 2026-09-18 22:34:42
+- 代码 `8c25aab`｜Python 3.13.9｜生成于 2026-09-18 23:40:00
 - 用例 32 条，跳过 3 条，执行异常 0 条
 
 ## 指标
@@ -17,7 +17,7 @@
 | `grounding_catch_rate` | 0.750 | 4 | 编造数字被守卫拦下的比例 |
 | `grounding_false_positive_rate` | 0.000 | 3 | 真数字被误报的比例（越低越好） |
 
-- 延迟 p50 / p95：0.1 ms / 1.5 ms
+- 延迟 p50 / p95：0.1 ms / 1.3 ms
 - token：prompt 0 / completion 0（规则模式恒为 0，不参与结论）
 
 ## 按用例类型
