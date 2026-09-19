@@ -2,7 +2,7 @@
 
 - 搜索分辨率 24 点 → 复验分辨率 96 点。跨分辨率净收益不可比（护栏 2），结论只用下表的同场复验值。
 - 提案 6/6 步后停止（budget）；被拒：不可行 0、不安全 0、越界 0、重复 0
-- LLM 调用 0 次（回退启发式 0 次）｜耗时 1.8 s
+- LLM 调用 0 次（回退启发式 0 次）｜耗时 2.1 s
 
 ## 同分辨率复验（唯一可比的两个数）
 
@@ -16,14 +16,15 @@
 
 | # | 阶段 | 来源 | 参数 | 净收益(元) | 最高温(℃) | 可选 | 拒绝原因 |
 |---|---|---|---|---|---|---|---|
-| 1 | search | default | `（默认配置）` | 1260.58 | 35.4 | ✅ | — |
-| 2 | search | heuristic | `rated_power_kw=700` | 1220.26 | 35.2 | ✅ | — |
-| 3 | search | heuristic | `soc_max_pct=80` | 1113.47 | 35.0 | ✅ | — |
-| 4 | search | heuristic | `rated_power_kw=500` | 1051.48 | 34.5 | ✅ | — |
-| 5 | search | heuristic | `soc_max_pct=70` | 967.59 | 34.8 | ✅ | — |
-| 6 | search | heuristic | `soc_min_pct=30` | 1186.90 | 35.5 | ✅ | — |
-| 7 | search | heuristic | `rated_power_kw=700, soc_max_pct=80` | 1075.51 | 34.7 | ✅ | — |
+| 1 | search | default | `（默认配置）` | 1366.90 | 34.3 | ✅ | — |
+| 2 | search | heuristic | `rated_power_kw=700` | 1333.56 | 34.4 | ✅ | — |
+| 3 | search | heuristic | `soc_max_pct=80` | 1243.22 | 33.9 | ✅ | — |
+| 4 | search | heuristic | `rated_power_kw=500` | 1250.66 | 33.3 | ✅ | — |
+| 5 | search | heuristic | `soc_max_pct=70` | 1073.15 | 33.8 | ✅ | — |
+| 6 | search | heuristic | `soc_min_pct=30` | 1320.10 | 34.0 | ✅ | — |
+| 7 | search | heuristic | `rated_power_kw=700, soc_max_pct=80` | 1211.77 | 34.0 | ✅ | — |
 
 ## 备注
 
-- 搜索阶段（粗分辨率）没有找到优于默认约束的可选项，未做复验、保持默认配置。
+- 搜索阶段净收益不含需求响应补贴（storage-only 口径），复验阶段走完整生产链路含 DR；两个数不可互相比较。
+- 胜出门槛：净收益增幅须 > 2%。搜索与复验都跑在 mip_gap=1% 上，容差以内的差值不认作战果；门槛取容差的两倍留余量。输入序列固定取自当日落盘数据，同配置重复求解实测逐分不差。
