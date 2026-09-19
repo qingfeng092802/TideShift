@@ -5,7 +5,9 @@ trace 是"跑坏了怎么查"的答案，所以它自己必须比被它记录的
 """
 import inspect
 import json
+import re
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -249,6 +251,43 @@ def test_traces_list_is_readable(client):
     detail = client.get(f"/api/traces/{rid}", headers=h)
     assert detail.status_code == 200
     assert detail.json()["spans"][0]["name"] == "work"
+
+
+def test_traces_list_reports_its_own_caliber(client, monkeypatch):
+    """追溯页要按接口给的口径自我解释（为什么看不到原文、为什么只有最近 N 次），
+    所以级别与容量必须随环境变量走；同时绝不把本机目录路径回传给浏览器。"""
+    monkeypatch.setenv("ENERGY_TRACE_LEVEL", "full")
+    monkeypatch.setenv("ENERGY_TRACE_MAX", "7")
+    with trace.run("manual"):
+        pass
+    meta = client.get("/api/traces", headers=_headers(client)).json()["meta"]
+    assert set(meta) == {"level", "capacity", "kept"}
+    assert meta["level"] == "full" and meta["capacity"] == 7
+    assert meta["kept"] >= 1
+    assert "dir" not in meta and str(trace.trace_dir()) not in json.dumps(meta, ensure_ascii=False)
+
+
+def test_broken_caliber_env_falls_back(monkeypatch):
+    """口径字段是用户可写的 env，写坏了要有默认值，不能让页面拿到 None 或 0。"""
+    monkeypatch.setenv("ENERGY_TRACE_LEVEL", "verbose")
+    monkeypatch.setenv("ENERGY_TRACE_MAX", "abc")
+    st = trace.status()
+    assert st["level"] == "basic" and st["capacity"] == 64
+
+
+def test_nav_pages_are_wired_end_to_end():
+    """加了导航项却忘了注册渲染器 / 忘了放 <section>，是"点一下才炸"的那类错误，
+    所以在不启动浏览器的前提下先把三处对齐钉住。"""
+    root = Path(__file__).resolve().parents[1]
+    nav = re.findall(r'\{ id: "([a-z-]+)", label:',
+                     (root / "web/js/app.js").read_text(encoding="utf-8"))
+    sections = re.findall(r'id="page-([a-z-]+)"',
+                          (root / "web/index.html").read_text(encoding="utf-8"))
+    renderers = re.findall(r"^  ([a-z-]+): \{ render: ",
+                           (root / "web/js/pages.js").read_text(encoding="utf-8"), re.M)
+    assert nav and set(nav) == set(sections) == set(renderers), (
+        f"NAV={nav} sections={sections} RENDERERS={renderers}")
+    assert "traces" in nav
 
 
 def test_unknown_run_id_is_404_not_path_lookup(client):

@@ -1127,11 +1127,162 @@ async function collectSettingsParams(root) {
   Object.assign(State.boot.params, payload);
 }
 
+/* ================= 运行追溯：/api/traces 的只读视图 ================= */
+const TRACE_KIND = {
+  solve: "调度求解", explain: "决策解释", chat: "对话",
+  chat_stream: "对话（流式）", param_search: "约束寻优",
+};
+let _traceSeq = 0;
+
+function _traceTag(st) {
+  const s = String(st || "");
+  if (s === "ok") return '<span class="status-tag st-ok">正常</span>';
+  if (s === "running") return '<span class="status-tag st-info">进行中</span>';
+  if (s.indexOf("degraded") === 0) return '<span class="status-tag st-warn">降级</span>';
+  return `<span class="status-tag st-danger">${esc(s || "未知")}</span>`;
+}
+
+function _fmtMs(v) {
+  const n = Number(v) || 0;
+  return n >= 1000 ? (n / 1000).toFixed(2) + " s" : n.toFixed(1) + " ms";
+}
+
+function _traceAttrs(obj) {
+  return Object.entries(obj || {}).map(([k, v]) =>
+    `<span class="tag tag-neutral" style="margin:0 4px 4px 0;">${esc(k)}=${
+      esc(Array.isArray(v) ? v.join(",") : String(v))}</span>`).join("");
+}
+
+function _traceLevelNote(level) {
+  const lv = String(level || "basic");
+  if (lv === "off") return "追溯当前为 <b>off</b>，页面自然没有任何记录。";
+  if (lv === "full") return "追溯当前为 <b>full</b>：事件里带文本内容，本页会直接显示出来。";
+  return "追溯当前为 <b>basic</b>（默认）：只记耗时、长度与状态，"
+    + "<b>不记问题原文与回答文本</b>——对话里可能出现你上传的负荷数据，所以默认不落盘、也不上页面。";
+}
+
+async function renderTraces(root) {
+  const seq = ++_traceSeq;
+  root.innerHTML = `
+    <div class="page-title">运行追溯</div>
+    <div class="page-subtitle">每次求解 / 对话 / 解释 / 寻优的事件序列 · 只读</div>
+    <div class="empty-state"><div class="ico">⏱️</div><div class="t">加载中…</div></div>`;
+  let data;
+  try {
+    data = await API.get("/api/traces?limit=50");
+  } catch (e) {
+    if (seq !== _traceSeq) return;
+    if (e && e.status === 401) return;
+    root.innerHTML = `
+      <div class="page-title">运行追溯</div>
+      <div class="empty-state"><div class="ico">⚠️</div><div class="t">追溯接口读取失败</div>
+        <div class="d">${esc(e.message || "未知错误")}</div>
+        <div style="margin-top:10px;"><button class="btn btn-sm" id="tr-retry">重试</button></div></div>`;
+    $("#tr-retry", root).addEventListener("click", () => App.showPage("traces"));
+    return;
+  }
+  if (seq !== _traceSeq) return;
+  const runs = data.runs || [];
+  const meta = data.meta || {};
+  const cap = Number(meta.capacity) || 0;
+  const degraded = runs.filter((r) => r.status !== "ok" && r.status !== "running").length;
+  const slowest = runs.reduce((a, r) => Math.max(a, Number(r.duration_ms) || 0), 0);
+
+  root.innerHTML = `
+    <div class="page-title">运行追溯</div>
+    <div class="page-subtitle">每次求解 / 对话 / 解释 / 寻优的事件序列 · 只读</div>
+
+    <div class="grid grid-4" style="margin-top:16px;">
+      <div class="kpi-card"><div class="kpi-label">内存环形里的运行</div>
+        <div class="kpi-value num">${runs.length}</div>
+        <div class="kpi-sub">环形容量 ${cap} 次，重启即清空</div></div>
+      <div class="kpi-card"><div class="kpi-label">非正常结束</div>
+        <div class="kpi-value num">${degraded}</div>
+        <div class="kpi-sub">含降级与报错两类</div></div>
+      <div class="kpi-card"><div class="kpi-label">最慢一次运行</div>
+        <div class="kpi-value num">${_fmtMs(slowest)}</div>
+        <div class="kpi-sub">整轮墙钟时间，不是单环节</div></div>
+      <div class="kpi-card"><div class="kpi-label">脱敏级别</div>
+        <div class="kpi-value" style="font-size:20px;">${esc(String(meta.level || "basic"))}</div>
+        <div class="kpi-sub">由 <code>ENERGY_TRACE_LEVEL</code> 决定</div></div>
+    </div>
+
+    <div class="panel-card" style="margin-top:14px;font-size:12.5px;line-height:1.8;">
+      ${_traceLevelNote(meta.level)}<br>
+      本页只显示<b>本进程内存</b>里保留的最近运行；更早的记录在
+      <code>logs/traces/trace-YYYYMMDD.jsonl</code>，接口不提供读历史文件的能力。
+    </div>
+
+    <div class="section-title">🧾 最近运行（点一行看事件序列）</div>
+    ${runs.length ? `
+    <div class="table-wrap"><table class="dtable">
+      <thead><tr><th scope="col">开始时间</th><th scope="col">类型</th>
+        <th style="text-align:center;">状态</th><th class="r">整轮耗时</th>
+        <th class="r">环节数</th><th class="r">异常</th><th scope="col">最慢环节</th></tr></thead>
+      <tbody>${runs.map((r) => `
+        <tr data-run="${esc(r.run_id)}" style="cursor:pointer;">
+          <td class="num">${esc(String(r.started_at || "").replace("T", " ").slice(0, 19))}</td>
+          <td>${esc(TRACE_KIND[r.kind] || r.kind)}</td>
+          <td style="text-align:center;">${_traceTag(r.status)}</td>
+          <td class="r num">${_fmtMs(r.duration_ms)}</td>
+          <td class="r num">${Number(r.n_spans) || 0}</td>
+          <td class="r num" style="color:${r.errors ? "var(--danger)" : "var(--text-3)"};">${Number(r.errors) || 0}</td>
+          <td>${esc(r.slowest_span || "—")}${r.slowest_span ? ` <span class="num" style="color:var(--text-3);">(${_fmtMs(r.slowest_ms)})</span>` : ""}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` : `
+    <div class="empty-state"><div class="ico">🗂️</div><div class="t">还没有运行记录</div>
+      <div class="d">去「数据总览」点一次重新调度，或打开右侧对话问一句，回来这里就有了。</div></div>`}
+
+    <div id="tr-detail"></div>`;
+
+  const detail = $("#tr-detail", root);
+  $$("tr[data-run]", root).forEach((tr) => tr.addEventListener("click", async () => {
+    $$("tr[data-run]", root).forEach((x) => x.style.background = "");
+    tr.style.background = "var(--accent-soft)";
+    detail.innerHTML = `<div class="section-title">🔍 事件序列</div>
+      <div class="empty-state"><div class="t">加载中…</div></div>`;
+    detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const id = tr.getAttribute("data-run") || "";
+    let rt;
+    try {
+      rt = await API.get("/api/traces/" + encodeURIComponent(id));
+    } catch (e) {
+      detail.innerHTML = `<div class="section-title">🔍 事件序列</div>
+        <div class="empty-state"><div class="ico">⚠️</div><div class="t">读取失败</div>
+        <div class="d">${esc(e.message || "未知错误")}</div></div>`;
+      return;
+    }
+    const spans = rt.spans || [];
+    const maxDur = spans.reduce((a, s) => Math.max(a, Number(s.dur_ms) || 0), 0) || 1;
+    detail.innerHTML = `
+      <div class="section-title">🔍 ${esc(TRACE_KIND[rt.kind] || rt.kind)}
+        <span class="num" style="color:var(--text-3);font-weight:400;">${esc(rt.run_id)}</span></div>
+      <div class="panel-card" style="font-size:12.5px;">
+        ${_traceTag(rt.status)} <span class="num">整轮 ${_fmtMs(rt.duration_ms)}</span>
+        <div style="margin-top:8px;">${_traceAttrs(rt.attrs) || '<span style="color:var(--text-3);">（本轮无附加属性）</span>'}</div>
+      </div>
+      <div class="table-wrap" style="margin-top:12px;"><table class="dtable">
+        <thead><tr><th scope="col">环节</th><th style="text-align:center;">状态</th>
+          <th class="r">耗时</th><th scope="col" style="width:34%;">占比</th>
+          <th scope="col">属性</th></tr></thead>
+        <tbody>${spans.length ? spans.map((s) => `
+          <tr><td>${esc(s.name)}</td>
+            <td style="text-align:center;">${_traceTag(s.status)}</td>
+            <td class="r num">${_fmtMs(s.dur_ms)}</td>
+            <td><div style="height:8px;border-radius:4px;background:var(--accent);
+              width:${Math.max(2, Math.round((Number(s.dur_ms) || 0) / maxDur * 100))}%;"></div></td>
+            <td style="font-size:11.5px;">${_traceAttrs(s.attrs)}</td></tr>`).join("")
+          : `<tr><td colspan="5" style="color:var(--text-3);">本轮没有记录到环节</td></tr>`}
+        </tbody></table></div>`;
+  }));
+}
+
 const RENDERERS = {
   dashboard: { render: renderDashboard, needsData: true },
   scheduling: { render: renderScheduling, needsData: true },
   forecast: { render: renderForecast, needsData: true },
   thermal: { render: renderThermal, needsData: true },
   dr: { render: renderDemandResponse, needsData: true },
+  traces: { render: renderTraces, needsData: false },
   settings: { render: renderSettings, needsData: false },
 };
