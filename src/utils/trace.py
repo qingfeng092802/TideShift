@@ -240,6 +240,19 @@ def find(run_id: str) -> Optional[RunTrace]:
     return None
 
 
+def status() -> Dict[str, Any]:
+    """追溯层自身的口径：脱敏级别、环形容量、当前保留条数。
+
+    前端需要据此解释"为什么看不到对话原文"（basic 级只记长度）和"为什么只有最近
+    N 次运行"，把这些写在接口里，而不是在 JS 里复制一份默认值——两边一旦漂移，
+    页面就会对着一套不存在的配置自我解释。**不回传目录绝对路径**：那是本机布局，
+    对页面没用，对侦察者有用。
+    """
+    with _RECENT_LOCK:
+        kept = len(_RECENT)
+    return {"level": _level(), "capacity": _max_kept(), "kept": kept}
+
+
 def reset() -> None:
     """测试用：清空进程内环形与当前线程的 run。文件里的历史记录不动。"""
     with _RECENT_LOCK:

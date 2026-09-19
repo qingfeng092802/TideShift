@@ -1659,8 +1659,13 @@ def auth_change_password(req: ChangePwdReq):
 
 @app.get("/api/traces")
 def traces(limit: int = 20):
-    """最近若干次运行的追溯摘要（只读、进程内环形）。"""
-    return {"runs": trace.recent(max(1, min(int(limit or 20), 50)))}
+    """最近若干次运行的追溯摘要（只读、进程内环形）。
+
+    连 `meta` 一起返回：追溯页要按当前脱敏级别解释"为什么这里看不到问题原文"，
+    级别与环形容量都由环境变量决定，不能在前端另写一份默认值。
+    """
+    return {"runs": trace.recent(max(1, min(int(limit or 20), 50))),
+            "meta": trace.status()}
 
 
 @app.get("/api/traces/{run_id}")
