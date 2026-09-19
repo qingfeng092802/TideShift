@@ -810,7 +810,7 @@ test(thermal): 补充热模型末点边界断言
 本项目采用 **MIT License**，详见 [`LICENSE`](LICENSE)。
 
 ```
-Copyright (c) 2026 qingfeng092802 (qingfeng092802)
+Copyright (c) 2026 qingfeng092802
 ```
 
 你可以自由使用、修改、分发本项目（包括商业用途），但需保留原始版权声明与许可证文本。软件按"现状"提供，不附带任何形式的担保。

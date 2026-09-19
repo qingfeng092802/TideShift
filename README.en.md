@@ -596,7 +596,7 @@ test(thermal): assert the thermal model's last-point boundary
 ## License
 This project is under the **MIT License** — see [`LICENSE`](LICENSE). You may use, modify and distribute it freely, commercially included, provided the original copyright notice and licence text are retained; the software is offered "as is", without warranty of any kind.
 ```
-Copyright (c) 2026 qingfeng092802 (qingfeng092802)
+Copyright (c) 2026 qingfeng092802
 ```
 **Third-party components**: the repository **redistributes** Apache ECharts (`web/vendor/echarts.min.js`, Apache-2.0), which itself bundles ZRender (BSD 3-Clause) and 0BSD fragments from Microsoft; attribution and licence statements are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), with licence texts archived under [`licenses/`](licenses/). Python dependencies are not redistributed — pip installs them from PyPI and each carries its own licence; how to generate the full list is described in the third-party notices document.
 
