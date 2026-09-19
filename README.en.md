@@ -53,7 +53,7 @@ Delivery is a web dashboard (FastAPI + vanilla JS + ECharts, all frontend assets
 > **Tech keywords**: PuLP / HiGHS, MILP + SOS2 piecewise linearization, XGBoost, LangGraph, LLM decision-explanation layer with hallucination back-check, FastAPI.
 
 ## Screenshots
-Clicking "开始求解" ("Start solving") runs the full chain — load forecast → MILP dispatch → demand response. Measured end to end on the development machine: **26 ~ 43 seconds**, MILP solve included.
+Clicking "开始求解" ("Start solving") runs the full chain — load forecast → MILP dispatch → demand response. Measured end to end on the development machine: **26 ~ 51 seconds**, MILP solve included.
 
 ![Dashboard](docs/screenshots/02-dashboard-light.png)
 <details>
@@ -86,7 +86,7 @@ Clicking "开始求解" ("Start solving") runs the full chain — load forecast 
 | 🧠 **LLM decision-explanation layer** | Dispatch results are compressed into a fact digest before the LLM phrases them; output numbers are back-checked and invented ones flagged; missing key / offline / errors all degrade to rule templates automatically |
 | 🧪 **Constraint-parameter search agent** | Propose → evaluate on real MILP → re-verify → propose again. Solutions past the temperature limit cannot be selected, coarse-resolution numbers never reach the conclusion, and "did not beat the default" is written as "did not beat the default" |
 | 💬 **Chat agent** | Rule mode + LLM mode, 8 tool functions (including whole-day explanation and Q&A over the digest), SSE streaming supported |
-| 📊 **Web dashboard** | 6 pages (overview / scheduling / load forecast / thermal / demand response / settings) plus light and dark themes |
+| 📊 **Web dashboard** | 7 pages (overview / scheduling / load forecast / thermal / demand response / run tracing / settings) plus light and dark themes |
 | 📁 **Your own data** | NREL ComStock, Chinese industrial load, and standard-format files are detected automatically; the dispatch cache is keyed to a data fingerprint and invalidated on upload |
 
 ## Architecture
@@ -134,7 +134,7 @@ Five guardrails, each with a test behind it:
 4. **Solver noise is not a win**: with `mip_gap=1%`, re-solving the same configuration measured about 1% apart (three runs: 1244.24 / 1255.87 / 1260.58 CNY), so the bar for "beats default" is set at 2%.
 5. **The agent is allowed to lose**: if re-verification does not beat the default configuration, the report says "did not beat the default" and default is used — the same caliber as "naive baseline first" in the forecast module.
 
-Without an API key, a deterministic heuristic proposer (coordinate descent) runs the full loop. It doubles as the **non-intelligent baseline**: with nothing to compare against, "the agent works" has no content. One real run (bundled data, dispatch day 2024-07-30, 6 candidates, 1.7 seconds) is in [`docs/parameter-search-sample.md`](docs/parameter-search-sample.md); the conclusion is that **heuristic search did not beat the default constraints** — both lowering power and narrowing the SOC window reduced net revenue. That is an honest measurement, not a failed demo.
+Without an API key, a deterministic heuristic proposer (coordinate descent) runs the full loop. It doubles as the **non-intelligent baseline**: with nothing to compare against, "the agent works" has no content. One real run (bundled data, dispatch day 2024-07-30, 6 candidates, 1.8 seconds) is in [`docs/parameter-search-sample.md`](docs/parameter-search-sample.md); the conclusion is that **heuristic search did not beat the default constraints** — both lowering power and narrowing the SOC window reduced net revenue. That is an honest measurement, not a failed demo.
 ```bash
 python -m src.agents.parameter_search_agent --date 2024-07-30 --search-steps 24 --max-steps 6
 DEEPSEEK_API_KEY=sk-... python -m src.agents.parameter_search_agent --llm   # LLM proposes
@@ -238,7 +238,7 @@ python -m backend.manage reset-password --password 'your-new-password'
 
 > ⚠️ So **do not** describe `0600` as a cross-platform security boundary: on Windows the ACL above is what actually applies. Note too that with `ENERGY_AUTH_MODE=env` it is the **password** that stays off disk; the JWT signing key `config/.auth_secret` and the API-key encryption key `config/.api_secret` are still created — without them every restart would invalidate all tokens and make stored API keys undecryptable.
 
-After login, click **"开始求解" ("Start solving")** to trigger the full dispatch flow (MILP solve included; **26 ~ 43 seconds** measured locally, varying with the day's size and machine performance). Results are cached on disk, so later visits are instant. Hitting the data endpoints before any solve returns `409 Conflict`, which is expected — solve once first.
+After login, click **"开始求解" ("Start solving")** to trigger the full dispatch flow (MILP solve included; **26 ~ 51 seconds** measured locally, varying with the day's size and machine performance). Results are cached on disk, so later visits are instant. Hitting the data endpoints before any solve returns `409 Conflict`, which is expected — solve once first.
 
 ## Usage
 ### Pages
@@ -250,6 +250,7 @@ After login, click **"开始求解" ("Start solving")** to trigger the full disp
 | 📈 **Load forecast** | Forecast vs actual, multi-day accuracy, naive-baseline comparison |
 | 🌡️ **Battery thermal** | Temperature simulation curve, derating bands annotated, degradation cost |
 | 📡 **Demand response** | DR events and outcomes, the three validation checks, net revenue accounting |
+| 🔍 **Run tracing** | Event sequence per run: step durations, whether the LLM took the main path or degraded, slowest step |
 | ⚙️ **Settings** | Model provider config, battery/tariff parameters, theme switch, password change |
 
 The sidebar additionally carries the **chat agent** (rule / LLM modes) and the **data upload / management** entry.
@@ -370,7 +371,7 @@ TideShift/
 │   ├── grounding.py                     # grades check_grounding() itself: catch rate / false-positive rate
 │   ├── harness.py                       # one solve reused throughout; rule / LLM modes
 │   ├── run_eval.py                      # CLI: report generation + baseline regression gate
-│   └── reports/                         # rule-latest.md (current measurement) + baseline.json (regression baseline)
+│   └── reports/                         # rule-latest.md (rule mode) + llm-latest.md (real model) + baseline.json (regression baseline)
 ├── tests/                               # pytest with real assertions, no placeholder cases
 ├── docs/
 │   ├── experiments.md                   # full experiment record + unverified-items list + reproduction commands
@@ -424,7 +425,9 @@ SOC-band degradation coefficients (deep cycling 2~3× shallow cycling):
 | 0.5–0.8 | 1.0 | Sweet spot |
 | 0.8–1.0 | 2.0 | Fast SEI growth |
 
-The MILP objective uses big-M plus binaries to allocate each interval's throughput across the 4 bands and bill it at the band coefficient, which makes the real cost structure **visible** to the optimizer: it learns that extra throughput at high SOC costs twice what it costs in the 0.5–0.8 band, and trades off better. Measured: net revenue 1245.30 CNY with the exact model vs 1224.08 CNY with a constant approximation.
+The MILP objective uses big-M plus binaries to allocate each interval's throughput across the 4 bands and bill it at the band coefficient, so the real cost structure is **visible** to the optimizer: it can see that extra throughput at high SOC costs twice what it costs in the 0.5–0.8 band.
+
+**What that buys is not a bigger daily number.** Measured on 2024-07-30 under one shared post-hoc cost caliber: banded **1219.75 CNY** vs constant approximation **1218.08 CNY** — **+1.67 CNY (0.14%)**, below both this project's 2% materiality threshold and the 1% MIP gap. The near-tie is two errors cancelling: the constant coefficient billed that power profile at 556.45 CNY of degradation where the true figure is 391.49 CNY (**42% overstated**), so the optimizer walked away from 93.22 CNY of arbitrage and 91.55 CNY of real wear in the same move. Banded modelling changes the trade the optimizer makes (1.8114 vs 1.4681 equivalent cycles), not the day's ledger. Direction guarded by `tests/test_storage_agent.py::test_soc_weighted_degradation_improves_decisions` (`slow`).
 
 ### Steady-state daily cycle
 `terminal_soc="cyclic"` (default) enforces `SOC[96] == SOC[0]`, so the plan stays sustainable day after day. Three annualization calibers exist with different meanings; whichever you quote, say which one:
@@ -460,7 +463,7 @@ In data-driven mode (default), `physical_correction` learns a temperature-residu
 | Side-effect guard (no MILP re-run when it shouldn't) | 1.000 (5) | 1.000 (5) |
 | Fabricated-number catch rate | **0.750** (3/4) | 0.750 (3/4) |
 | Guard false-positive rate | 0.000 | 0.000 |
-| Latency p50 / p95 | 0 / 0 ms | 5,073 / 28,831 ms |
+| Latency p50 / p95 | 0.1 / 1.3 ms | 5,073 / 28,831 ms |
 | Tokens (prompt / completion) | always 0, excluded from conclusions | 132,533 / 32,257 |
 
 **Wiring in a real model made the task success rate *lower*, by 3.1 points on the same-denominator caliber, and only one of the three lost cases is the model's fault**:
@@ -500,9 +503,13 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run
 | Daily degradation cost | 130.04 CNY | 504.67 CNY | 525.58 CNY |
 | Daily net revenue (arbitrage − degradation) | 626.49 CNY | **1198.12 CNY** | 1309.00 CNY |
 | Peak battery temperature | 42.3 ℃ | 46.99 ℃ (derating band) | 57.12 ℃ (past the 55 ℃ shutdown threshold) |
-| Solve time | < 0.1 s | 38 ~ 43 s (HiGHS, MIP gap = 0%) | 24.1 s |
+| Solve time | < 0.1 s | 40 ~ 43 s (HiGHS, `mip_gap` default **1%**) | 24.1 s |
 
 > Reproduction environment: Python 3.13.14 + `requirements.lock`. "Daily net revenue" in this table is always **arbitrage − degradation** (no DR subsidy), matching the baseline's caliber.
+>
+> **This table was re-reproduced in the current round**: `use_ml_forecast=True`, `include_thermal=True`, `initial_soc=0.5`, the two default DR events, `mip_gap` at its code default of 1%. The whole run took 42.7 s and reported arbitrage 1702.79 / degradation 504.67 / net-with-DR 1731.89 (= this table's 1198.12 + the 533.77 DR subsidy) / peak 46.99 ℃ / 1.8925 equivalent cycles — matching line by line. Reproduction script: [`docs/experiments.md`](docs/experiments.md).
+>
+> ⚠️ That row used to read `MIP gap = 0%`, **which was wrong** (corrected by measurement this round): these numbers come from gap 1%. Tightening the gap to 0% on the same input costs 100.6 s and yields a different, better **base schedule** — net 1219.75 → 1254.59 (+2.9%). So the price of a gap tolerance can exceed the gap: the objective bills `degradation_in_objective` while the report recomputes it post-hoc with band weighting, and when the two calibers differ a 1% tolerance can surface as a 2.9% difference in results.
 > ⚠️ **Dispatch-day caliber**: this table is **2024-07-30**. The default dispatch day is the **middle day** of the available date list (`dates[(len(dates)-1)//2]`; the bundled 30-day dataset spans 2024-07-01 ~ 07-30, so the default is **2024-07-15**), which is why the numbers you first see differ — e.g. the screenshots show daily net revenue 1623.85 CNY and peak temperature 48.3 ℃. Both are real solve results on different days and **must not be compared side by side**. Full 2024-07-15 measurements: [`docs/experiments.md`](docs/experiments.md).
 
 **Key findings**
@@ -561,6 +568,8 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | `test_parameter_search.py` | The four guardrails of the search agent (temperature violations not selectable, coarse-resolution numbers kept out of conclusions, budget and time limit, noise is not a win) + 1 real MILP run |
 | `test_trace.py` | Trace thread isolation, per-level redaction, decorator signature preservation, `/api/traces` auth and `run_id` never used as a path, caliber reported back, terminal status on abandoned streams, sidebar/renderer/section wiring (22 items) |
 | `test_web_assets.py` | Frontend wiring conventions: every local css/js carries `?v=`, the cache key equals `__version__`, referenced files exist (9 items) |
+| `test_review_fixes.py` | Backend security/robustness regressions: static extension whitelist, JWT UA fingerprint, login rate-limiter LRU cap, HSTS/CSP headers, unified DELETE semantics, upload temp-file path (10 items, no MILP) |
+| `test_dr_thermal_overshoot.py` | DR thermal check must cover thermal inertia overshoot **after** the event window (a missed case historically: 48.9 ℃ past the 45 ℃ derating line) (2 items) |
 
 ## FAQ
 
@@ -575,7 +584,7 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | **You edited css/js under `web/` but the page looks unchanged** | The browser is serving a cached copy — the `?v=` cache key in `web/index.html` was not moved with the change (convention: equal to `__version__`, bumped at release). If a hard refresh fixes it, it was the cache, not the code. A missing `?v=`, a key that disagrees with the version, or a reference to a file that does not exist now all fail `tests/test_web_assets.py` |
 | **Explanation keeps showing "rule template"** | No LLM key, or the key is invalid / the network unreachable — designed degradation, main flow unaffected |
 | **Forecast accuracy poor after uploading data** | Under 11 days of history it degrades to naive baseline with no physical correction, plus a degradation alert on the dashboard. Threshold from `required_history_days()`: 7 days of lag + 3 days of test split + 1 day training floor |
-| **Are DR events read from `data/load/dr_signals.csv`?** | **No.** The web flow generates two default DR events for the selected dispatch day (15:00–17:00 / 19:30–20:30), plus in-page manual triggering and `POST /api/dr/trigger`. `dr_signals.csv` is offline sample data whose loader `load_dr_signals()` is referenced only by tests, not by the web chain — editing that CSV will not change the DR events in the UI |
+| **Are DR events read from `data/load/dr_signals.csv`?** | **No.** The web flow generates two default DR events for the selected dispatch day (15:00–17:00 / 19:30–20:30), plus in-page manual triggering and `POST /api/dr/trigger`. `dr_signals.csv` is offline sample data its loader `load_dr_signals()` is referenced by tests and by the command-line search script (`--with-dr`), but not by the web chain — editing that CSV will not change the DR events in the UI |
 | **Which day is the default dispatch day?** | The **middle day** of the available date list (`dates[(len(dates)-1)//2]`). The bundled 30-day dataset spans 2024-07-01 ~ 07-30, so the default is **2024-07-15**, and uploading your own data shifts it with the data. The rule avoids a hard-coded date deliberately, so a changed data range cannot leave the default outside the data and blank the pages |
 | **`ADMIN_INITIAL_PASSWORD` stops working after `pytest`, or no password logs in** | Earlier versions wrote test credentials into the repo's `config/`, so the server read a test-generated random password and skipped initialization. **Fixed** — test state is isolated to a temp directory, overridable via `ENERGY_CONFIG_DIR`. If it still happens, inspect with `python -m backend.manage show-state` and fix with `python -m backend.manage reset-password` |
 | **I want `ADMIN_INITIAL_PASSWORD` to apply on every start (common in containers)** | Set `ENERGY_AUTH_MODE=env`. Default `persistent` reads that variable only when creating the file for the first time, then defers to `config/auth.json` — deliberately, otherwise a password you changed in the UI would be overwritten by the environment variable on the next restart |
