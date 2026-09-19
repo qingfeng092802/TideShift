@@ -51,6 +51,43 @@
   已作为常见问题写进两份 README 的 FAQ——这个坑值得被单独说一次：**行尾差异在"有 SRI 的静态资源"上
   会从 cosmetic 升级成 hard failure**。
 
+### 新增（Added）—— 2026-09-19 真实模型评测（`--mode llm`）
+
+- **补上此前欠下的那一轮真实模型回归**：`python -m evals.run_eval --mode llm --model deepseek-flash`
+  跑通 35 例（0 跳过 / 0 异常 / 347 秒 / 16.5 万 token），报告入库为
+  `evals/reports/llm-latest.{json,md}`。**写的是实测值而不是好看的值**：任务成功率 0.914，
+  换算到与规则模式**同分母的 32 例是 0.938，仍低于规则模式的 0.969**；数字保真 1.000（9 例带锚点）、
+  副作用守卫 1.000（5 例）、编造捕获 0.750、误报 0.000 与规则模式一致；延迟 p50 5 073 ms /
+  p95 28 831 ms（规则模式恒为 0）。
+- **三条失败逐条归因，没有放宽任何断言**：`q-dr-accepted`、`q-dr-rejected-reason` 是被
+  `must_contain` 里的规则模板表面符号（`✅`/`❌`）判掉的，模型回答的事实部分完整且正确；
+  `l-what-if` 是**用例点错**——`run_with_params` 的六个旋钮没有一个能表达"限制循环次数"，
+  模型先答"没有这个开关"（这句是对的），随后自行估出 400–700 元区间（这才是被量出来的真风险）。
+  口径问题写进 `evals/README.md` 的已知失败用例表，指标原样保留。
+- **暴露出守卫的作用域边界**（记入两份 README 的已知局限）：`check_grounding()` 只挂在调度解释路径上，
+  对话回答不回查；而"摘要里两个数字相减"这类派生数字、`kJ/K` 这类白名单外量纲本来就不在它的能力范围内。
+  没有顺手把回查接到对话路径，因为那会把 1.000 的数字保真率换成一片误报。
+
+### 变更（Changed）—— 跨模式比较的分母口径
+
+- **修掉一个会产出假结论的比较**：`--mode llm` 与规则模式基线比较时，报告原本直接给出"退化 0.054"，
+  而其中一部分原因只是**分母不同**（llm 35 例 vs rule 32 例）。新增
+  `evals/run_eval.py::compare_with_baseline()`：模式或用例数不一致时，补一行"两侧都覆盖的用例子集"
+  上的同分母成功率（本例 0.938 vs 0.969），并且**不把跨口径差值当门禁结论**（`--check-baseline` 只告警）。
+  规则模式报告逐字节未变（用存量 JSON 重渲染验证）。用例
+  `tests/test_evals.py::test_cross_mode_baseline_flags_denominator_mismatch`。
+- 测试规模随之 **232 → 233**（快测 200 → 201，`test_evals.py` 30 → 31 条），两份 README 与
+  `evals/README.md` 的计数同步。
+
+### 变更（Changed）—— 版权署名与提交元数据
+
+- `LICENSE` 与两份 README 的版权署名由真实姓名改为 GitHub handle `qingfeng092802`；随后用
+  `git filter-branch` 把**全部历史提交的 author/committer 元数据**统一为该 handle 的 noreply 邮箱
+  （树内容不变，只改元数据）。**副作用如实记录**：所有提交 SHA 改变，因此
+  `evals/reports/llm-latest.md` 里记的 `代码 f50a0ec` 在当前历史中已不可达（同一棵树现在是 `3316674`）；
+  重写过程丢掉了本地 `refs/remotes/origin/main`，而**远端 `main` 与 `v1.0.0` 标签仍是重写前的历史，
+  尚未同步**——要让远端跟上必须 `push --force` 并重打标签，这一步未做。
+
 ### 新增（Added）—— 2026-09-18 agent 行为评测层
 
 - **`evals/` 评测层**：与 `tests/` 分开计量。`tests/` 答"代码按设计跑了吗"，

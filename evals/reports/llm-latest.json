@@ -1,0 +1,906 @@
+{
+  "meta": {
+    "date": "2024-07-30",
+    "use_ml_forecast": false,
+    "solver_status": "Final_DR_Adjusted",
+    "git_sha": "f50a0ec",
+    "python": "3.13.9",
+    "stub_act": true,
+    "n_dr_signals": 2,
+    "mode": "llm",
+    "model": "deepseek-flash",
+    "generated_at": "2026-09-19 12:14:21",
+    "wall_seconds": 347.4
+  },
+  "metrics": {
+    "n_cases": 35,
+    "n_passed": 32,
+    "task_success_rate": 0.9143,
+    "tool_call_accuracy": 0.9714,
+    "tool_call_n": 35,
+    "answer_completeness": 0.9429,
+    "answer_completeness_n": 35,
+    "number_fidelity": 1.0,
+    "number_fidelity_n": 9,
+    "side_effect_guard_rate": 1.0,
+    "side_effect_guard_n": 5,
+    "latency_p50_ms": 5073.0,
+    "latency_p95_ms": 28830.7,
+    "prompt_tokens": 132533,
+    "completion_tokens": 32257,
+    "by_kind": {
+      "act": {
+        "n": 8,
+        "task_success_rate": 0.875
+      },
+      "explain": {
+        "n": 6,
+        "task_success_rate": 1.0
+      },
+      "guard": {
+        "n": 5,
+        "task_success_rate": 1.0
+      },
+      "query": {
+        "n": 16,
+        "task_success_rate": 0.875
+      }
+    },
+    "grounding_catch_rate": 0.75,
+    "grounding_planted_numbers": 4,
+    "grounding_missed_numbers": 1,
+    "grounding_false_positive_rate": 0.0,
+    "grounding_clean_probes_n": 3
+  },
+  "results": [
+    {
+      "case_id": "q-net-revenue",
+      "kind": "query",
+      "question": "今天的净收益是多少？",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 3543.115799955558,
+      "prompt_tokens": 2803,
+      "completion_tokens": 474,
+      "answer_len": 495
+    },
+    {
+      "case_id": "q-arbitrage",
+      "kind": "query",
+      "question": "峰谷套利赚了多少",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "compare_baseline"
+      ],
+      "failures": [],
+      "latency_ms": 4786.8633000180125,
+      "prompt_tokens": 2963,
+      "completion_tokens": 878,
+      "answer_len": 707
+    },
+    {
+      "case_id": "q-money-generic",
+      "kind": "query",
+      "question": "今天赚了多少钱",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 2458.199599990621,
+      "prompt_tokens": 2798,
+      "completion_tokens": 352,
+      "answer_len": 411
+    },
+    {
+      "case_id": "q-equivalent-cycles",
+      "kind": "query",
+      "question": "今天等效循环多少次",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 3314.6043999586254,
+      "prompt_tokens": 2816,
+      "completion_tokens": 442,
+      "answer_len": 504
+    },
+    {
+      "case_id": "q-charge-energy",
+      "kind": "query",
+      "question": "今天充了多少度电",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 2457.692300027702,
+      "prompt_tokens": 2819,
+      "completion_tokens": 241,
+      "answer_len": 270
+    },
+    {
+      "case_id": "q-max-temp",
+      "kind": "query",
+      "question": "电池温度怎么样",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_thermal_info",
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 4908.57029997278,
+      "prompt_tokens": 2921,
+      "completion_tokens": 826,
+      "answer_len": 698
+    },
+    {
+      "case_id": "q-thermal-risk",
+      "kind": "query",
+      "question": "电池会不会过热",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_thermal_info",
+        "get_report",
+        "explain_schedule"
+      ],
+      "failures": [],
+      "latency_ms": 7532.428900012746,
+      "prompt_tokens": 5086,
+      "completion_tokens": 1323,
+      "answer_len": 849
+    },
+    {
+      "case_id": "q-safety-check",
+      "kind": "query",
+      "question": "现在电池安全吗",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_thermal_info",
+        "get_report",
+        "explain_schedule"
+      ],
+      "failures": [],
+      "latency_ms": 5597.051299992017,
+      "prompt_tokens": 4845,
+      "completion_tokens": 953,
+      "answer_len": 630
+    },
+    {
+      "case_id": "q-degradation-cost",
+      "kind": "query",
+      "question": "今天的电池衰减成本是多少",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "get_thermal_info"
+      ],
+      "failures": [],
+      "latency_ms": 4080.4135999642313,
+      "prompt_tokens": 2952,
+      "completion_tokens": 679,
+      "answer_len": 714
+    },
+    {
+      "case_id": "q-dr-list",
+      "kind": "query",
+      "question": "今天有没有 DR 事件",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_dr_info"
+      ],
+      "failures": [],
+      "latency_ms": 2682.7993000042625,
+      "prompt_tokens": 2779,
+      "completion_tokens": 393,
+      "answer_len": 499
+    },
+    {
+      "case_id": "q-dr-accepted",
+      "kind": "query",
+      "question": "需求响应都被接受了吗",
+      "passed": false,
+      "tool_ok": true,
+      "content_ok": false,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_dr_info",
+        "get_thermal_info"
+      ],
+      "failures": [
+        "缺少要点「✅」"
+      ],
+      "latency_ms": 3693.2057000231,
+      "prompt_tokens": 4438,
+      "completion_tokens": 481,
+      "answer_len": 483
+    },
+    {
+      "case_id": "q-dr-rejected-reason",
+      "kind": "query",
+      "question": "为什么那个 DR 邀约被拒绝了",
+      "passed": false,
+      "tool_ok": true,
+      "content_ok": false,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_dr_info",
+        "get_report",
+        "get_thermal_info",
+        "explain_schedule"
+      ],
+      "failures": [
+        "缺少要点「❌」"
+      ],
+      "latency_ms": 8079.083000018727,
+      "prompt_tokens": 4855,
+      "completion_tokens": 1292,
+      "answer_len": 704
+    },
+    {
+      "case_id": "q-dr-subsidy",
+      "kind": "query",
+      "question": "需求响应一共补贴了多少",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_dr_info"
+      ],
+      "failures": [],
+      "latency_ms": 3659.8426999989897,
+      "prompt_tokens": 2774,
+      "completion_tokens": 579,
+      "answer_len": 623
+    },
+    {
+      "case_id": "q-vs-baseline",
+      "kind": "query",
+      "question": "和基准策略比怎么样",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "compare_baseline",
+        "get_report",
+        "get_thermal_info"
+      ],
+      "failures": [],
+      "latency_ms": 5605.3895999793895,
+      "prompt_tokens": 4972,
+      "completion_tokens": 838,
+      "answer_len": 768
+    },
+    {
+      "case_id": "q-baseline-temp",
+      "kind": "query",
+      "question": "跟不考虑热的策略比，温度差多少",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_thermal_info",
+        "compare_baseline"
+      ],
+      "failures": [],
+      "latency_ms": 19843.119999975897,
+      "prompt_tokens": 2966,
+      "completion_tokens": 4111,
+      "answer_len": 764
+    },
+    {
+      "case_id": "e-day-strategy",
+      "kind": "explain",
+      "question": "解释一下今天的调度策略",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": true,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "get_thermal_info",
+        "explain_day"
+      ],
+      "failures": [],
+      "latency_ms": 19005.332299973816,
+      "prompt_tokens": 3794,
+      "completion_tokens": 666,
+      "answer_len": 804
+    },
+    {
+      "case_id": "e-why-here",
+      "kind": "explain",
+      "question": "为什么 15 点在放电",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "explain_schedule",
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 4105.6590000516735,
+      "prompt_tokens": 2918,
+      "completion_tokens": 585,
+      "answer_len": 657
+    },
+    {
+      "case_id": "e-why-charge-night",
+      "kind": "explain",
+      "question": "凌晨为什么在充电",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "explain_schedule",
+        "explain_schedule",
+        "explain_schedule"
+      ],
+      "failures": [],
+      "latency_ms": 5025.994499970693,
+      "prompt_tokens": 3151,
+      "completion_tokens": 759,
+      "answer_len": 634
+    },
+    {
+      "case_id": "e-summary",
+      "kind": "explain",
+      "question": "帮我总结一下今天的调度结果",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "get_thermal_info",
+        "compare_baseline",
+        "get_dr_info"
+      ],
+      "failures": [],
+      "latency_ms": 5073.020799958613,
+      "prompt_tokens": 3204,
+      "completion_tokens": 986,
+      "answer_len": 894
+    },
+    {
+      "case_id": "e-risk",
+      "kind": "explain",
+      "question": "今天这套方案有什么风险",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "get_dr_info",
+        "get_thermal_info",
+        "explain_day",
+        "explain_schedule"
+      ],
+      "failures": [],
+      "latency_ms": 28377.69519997528,
+      "prompt_tokens": 6566,
+      "completion_tokens": 1028,
+      "answer_len": 729
+    },
+    {
+      "case_id": "e-digest-qa",
+      "kind": "explain",
+      "question": "为什么 14 点不放电",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "explain_schedule",
+        "get_report",
+        "get_thermal_info"
+      ],
+      "failures": [],
+      "latency_ms": 5254.473100008909,
+      "prompt_tokens": 4727,
+      "completion_tokens": 695,
+      "answer_len": 600
+    },
+    {
+      "case_id": "a-soc-upper-80",
+      "kind": "act",
+      "question": "把 SOC 上限调到 80% 重跑",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params",
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 5275.351999967825,
+      "prompt_tokens": 4554,
+      "completion_tokens": 783,
+      "answer_len": 614
+    },
+    {
+      "case_id": "a-soc-lower-30",
+      "kind": "act",
+      "question": "SOC 下限改成 30% 再算一次",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params",
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 6428.043699997943,
+      "prompt_tokens": 4428,
+      "completion_tokens": 997,
+      "answer_len": 595
+    },
+    {
+      "case_id": "a-rated-power-600",
+      "kind": "act",
+      "question": "额定功率调到 600kW 重跑",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params",
+        "get_report",
+        "compare_baseline"
+      ],
+      "failures": [],
+      "latency_ms": 5771.136299998034,
+      "prompt_tokens": 4745,
+      "completion_tokens": 894,
+      "answer_len": 680
+    },
+    {
+      "case_id": "a-disable-thermal",
+      "kind": "act",
+      "question": "关掉热约束重新跑一遍",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params",
+        "get_thermal_info",
+        "get_report"
+      ],
+      "failures": [],
+      "latency_ms": 5666.7438999866135,
+      "prompt_tokens": 4575,
+      "completion_tokens": 905,
+      "answer_len": 862
+    },
+    {
+      "case_id": "a-disable-dr",
+      "kind": "act",
+      "question": "不参与需求响应，再算一次",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params",
+        "get_report",
+        "get_dr_info"
+      ],
+      "failures": [],
+      "latency_ms": 5923.236699949484,
+      "prompt_tokens": 4698,
+      "completion_tokens": 954,
+      "answer_len": 556
+    },
+    {
+      "case_id": "a-two-params",
+      "kind": "act",
+      "question": "SOC 上限调到 85%、额定功率 800kW 重跑",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "run_with_params"
+      ],
+      "failures": [],
+      "latency_ms": 4015.9026000183076,
+      "prompt_tokens": 2780,
+      "completion_tokens": 645,
+      "answer_len": 448
+    },
+    {
+      "case_id": "a-vague-adjust",
+      "kind": "act",
+      "question": "帮我调整一下参数",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": true,
+      "executed": [
+        "get_report",
+        "get_thermal_info"
+      ],
+      "failures": [],
+      "latency_ms": 3543.7978000263683,
+      "prompt_tokens": 3034,
+      "completion_tokens": 557,
+      "answer_len": 540
+    },
+    {
+      "case_id": "g-no-dispatch-keyword",
+      "kind": "guard",
+      "question": "今天的调度策略是什么？",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": true,
+      "executed": [
+        "get_report",
+        "explain_day"
+      ],
+      "failures": [],
+      "latency_ms": 29887.631199962925,
+      "prompt_tokens": 3725,
+      "completion_tokens": 649,
+      "answer_len": 851
+    },
+    {
+      "case_id": "g-coordinate-word",
+      "kind": "guard",
+      "question": "帮我协调一下充放电安排",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": true,
+      "executed": [
+        "get_report",
+        "compare_baseline",
+        "get_thermal_info",
+        "explain_day",
+        "explain_schedule",
+        "explain_schedule",
+        "get_dr_info"
+      ],
+      "failures": [],
+      "latency_ms": 33788.01580000436,
+      "prompt_tokens": 6987,
+      "completion_tokens": 1832,
+      "answer_len": 839
+    },
+    {
+      "case_id": "g-out-of-scope-weather",
+      "kind": "guard",
+      "question": "明天天气怎么样，需要带伞吗",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": true,
+      "executed": [],
+      "failures": [],
+      "latency_ms": 1918.0012000142597,
+      "prompt_tokens": 1316,
+      "completion_tokens": 223,
+      "answer_len": 256
+    },
+    {
+      "case_id": "g-invent-forecast",
+      "kind": "guard",
+      "question": "帮我把明年电价涨 10% 后的收益重算一遍",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": true,
+      "executed": [
+        "get_report",
+        "compare_baseline"
+      ],
+      "failures": [],
+      "latency_ms": 8378.630699997302,
+      "prompt_tokens": 3127,
+      "completion_tokens": 1475,
+      "answer_len": 904
+    },
+    {
+      "case_id": "g-help",
+      "kind": "guard",
+      "question": "你能做什么",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [],
+      "failures": [],
+      "latency_ms": 2745.6539000268094,
+      "prompt_tokens": 1310,
+      "completion_tokens": 499,
+      "answer_len": 406
+    },
+    {
+      "case_id": "l-multi-tool",
+      "kind": "query",
+      "question": "温度和收益一起给我看下",
+      "passed": true,
+      "tool_ok": true,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "get_report",
+        "get_thermal_info"
+      ],
+      "failures": [],
+      "latency_ms": 4729.946600040421,
+      "prompt_tokens": 2928,
+      "completion_tokens": 715,
+      "answer_len": 608
+    },
+    {
+      "case_id": "l-what-if",
+      "kind": "act",
+      "question": "如果只允许充放一次，收益会掉多少？",
+      "passed": false,
+      "tool_ok": false,
+      "content_ok": true,
+      "number_ok": true,
+      "side_effect_ok": true,
+      "checks_numbers": false,
+      "checks_side_effect": false,
+      "executed": [
+        "compare_baseline",
+        "get_report",
+        "ask",
+        "get_dr_info",
+        "get_thermal_info"
+      ],
+      "failures": [
+        "未调用期望工具 ['run_with_params', 'explain_day']，实际调用 ['compare_baseline', 'get_report', 'ask', 'get_dr_info', 'get_thermal_info']"
+      ],
+      "latency_ms": 20684.81459998293,
+      "prompt_tokens": 7179,
+      "completion_tokens": 2548,
+      "answer_len": 785
+    }
+  ],
+  "probes": [
+    {
+      "probe_id": "gp-fabricated-money",
+      "planted": [
+        "4521",
+        "0.87"
+      ],
+      "expected": [
+        1594.59
+      ],
+      "flagged": [
+        "4521.00 元",
+        "0.87 元/kWh"
+      ],
+      "missed": [],
+      "false_positives": [],
+      "caught_all": true
+    },
+    {
+      "probe_id": "gp-fabricated-temp",
+      "planted": [
+        "71.5"
+      ],
+      "expected": [
+        55.0
+      ],
+      "flagged": [
+        "71.5 ℃"
+      ],
+      "missed": [],
+      "false_positives": [],
+      "caught_all": true
+    },
+    {
+      "probe_id": "gp-rounding-ok",
+      "planted": [],
+      "expected": [
+        1595.0,
+        1703.0,
+        505.0,
+        47.0
+      ],
+      "flagged": [],
+      "missed": [],
+      "false_positives": [],
+      "caught_all": true
+    },
+    {
+      "probe_id": "gp-count-words",
+      "planted": [],
+      "expected": [
+        3.0,
+        5.0,
+        2.0,
+        96.0
+      ],
+      "flagged": [],
+      "missed": [],
+      "false_positives": [],
+      "caught_all": true
+    },
+    {
+      "probe_id": "gp-unit-boundary",
+      "planted": [
+        "0.9"
+      ],
+      "expected": [
+        1.8925
+      ],
+      "flagged": [],
+      "missed": [
+        "0.9"
+      ],
+      "false_positives": [],
+      "caught_all": false
+    },
+    {
+      "probe_id": "gp-clean-report",
+      "planted": [],
+      "expected": [
+        1702.79,
+        396.47,
+        504.67,
+        1594.59,
+        46.9,
+        55.0,
+        8.1
+      ],
+      "flagged": [],
+      "missed": [],
+      "false_positives": [],
+      "caught_all": true
+    }
+  ],
+  "skipped": [],
+  "errors": []
+}

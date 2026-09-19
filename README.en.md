@@ -19,9 +19,9 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 **What it solves**: peak-charge / valley-discharge storage demos are everywhere, but the assumptions that make their revenue look good — whether the battery overheats, how much life it burns, whether any energy is left to sell tomorrow — usually never enter the model. This project writes all three **into the MILP's constraints and objective**, uses multi-agent + LLM to explain the result, and measures with an evaluation suite whether the numbers in that explanation were invented.
 - **Optimization vs baseline**: daily net revenue 626.49 → **1198.12 CNY (+91.2%)**, annualized **437,000 CNY** (same caliber as the baseline, no DR subsidies);
 - **The cost of constraints, shown**: the thermal constraints give up 8.5% of revenue and bring peak temperature 57.12 → **46.99 ℃** (back inside the derating band, 8 ℃ below the shutdown threshold);
-- **Agent behaviour is measured**: 32 cases → tool-call accuracy **0.969**, number fidelity **1.000**, fabricated-number catch rate **0.750**, with the statistical denominators and the known blind spot written up in [`evals/`](evals/README.md);
+- **Agent behaviour is measured**: offline rule mode, 32 cases → task success **0.969**, number fidelity **1.000**, fabricated-number catch rate **0.750**; with a real model (`deepseek-flash`) the same-denominator 32 cases drop to **0.938** — which two of the three losses are the grader's fault is written up in [`evals/`](evals/README.md);
 - **Tunes its own constraints and admits defeat honestly**: propose → evaluate on real MILP → re-verify at equal resolution; on this dataset it **did not beat the default constraints**, and the [report](docs/parameter-search-sample.md) says exactly that;
-- **Reproducible**: **232 tests** (200 fast + 32 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
+- **Reproducible**: **233 tests** (201 fast + 32 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
 > Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, slightly behind the naive baseline's 3.01%**; DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
 
 ![End-to-end demo: solve progress → overview → battery thermal → chat explanation](docs/screenshots/tideshift-demo.gif)
@@ -448,15 +448,30 @@ In data-driven mode (default), `physical_correction` learns a temperature-residu
 
 **Degradation chain**: no API key / network failure / malformed response / any exception → `template_explain()` rule templates, with the same output structure as the LLM path, and never dragging the main flow down.
 
-**Evaluation** (`python -m evals.run_eval`, offline rule mode, about 45 seconds, dispatch day 2024-07-30):
+**Evaluation** (dispatch day 2024-07-30. `python -m evals.run_eval` runs the offline rule mode in ~45 s;
+`python -m evals.run_eval --mode llm --model deepseek-flash` runs the real-model mode in 347 s. Same cases, same four-dimension judging — only the router changes from a keyword table to a model, so the two columns are directly comparable):
 
-| Metric | Value | Notes |
-|------|-----|------|
-| Chat task success rate | **0.969** (31/32) | Right tool + all key points + numbers consistent with the real report + no unauthorized side effect; only all four dimensions correct counts as a pass |
-| Fabricated-number catch rate | **0.750** (3/4) | Numbers invented outside the digest are injected into answers; measures how many the guard stops |
-| Guard false-positive rate | **0.000** | How often real numbers (including rounding, unitless count words) get wrongly flagged |
+| Metric | Offline rule mode (32 cases) | Real model `deepseek-flash` (35 cases) |
+|------|------|------|
+| Chat task success rate (all four dimensions) | **0.969** (31/32) | 0.914 (32/35) → **0.938 on the shared 32 cases** |
+| Tool-call accuracy (arguments included) | 0.969 | 0.971 |
+| Answer completeness (key points) | 1.000 | 0.943 |
+| Number fidelity (answer == real report) | **1.000** (9 cases with anchors) | **1.000** (9 cases with anchors) |
+| Side-effect guard (no MILP re-run when it shouldn't) | 1.000 (5) | 1.000 (5) |
+| Fabricated-number catch rate | **0.750** (3/4) | 0.750 (3/4) |
+| Guard false-positive rate | 0.000 | 0.000 |
+| Latency p50 / p95 | 0 / 0 ms | 5,073 / 28,831 ms |
+| Tokens (prompt / completion) | always 0, excluded from conclusions | 132,533 / 32,257 |
 
-The catch rate is not 1.0 because of one **registered blind spot**: the unit whitelist has no entry for `倍`, so ratio phrasings like "放电约为充电的 0.9 倍" never enter validation at all. That behaviour is pinned as an assertion in `tests/test_evals.py` (asserting the *miss*), and it turns red once the whitelist is completed. Full failing cases and calibers: [`evals/reports/rule-latest.md`](evals/reports/rule-latest.md); design rationale: [`evals/README.md`](evals/README.md).
+**Wiring in a real model made the task success rate *lower*, by 3.1 points on the same-denominator caliber, and only one of the three lost cases is the model's fault**:
+
+- `q-dr-accepted` and `q-dr-rejected-reason` fail because `must_contain` hard-codes **surface symbols** of the rule template (`✅` / `❌`). The model answered both questions *more* completely than the template (2 events, 1 accepted / 1 rejected, 62% achievement, correct net revenue and rejection reason) — it just did not copy the emoji. **That is a conservative grader, not a wrong answer**, so the metric is reported as measured: we do not loosen assertions to make the number look better.
+- `l-what-if` ("if only one charge/discharge cycle were allowed, how much revenue would we lose") expects `run_with_params`, but that tool exposes only six knobs — `soc_min/soc_max/rated_power/include_thermal/include_degradation/enable_dr` — **none of which can express "limit the cycle count"**. The model first said no such switch exists and an exact delta is impossible, then estimated a 400–700 CNY range. The case is mis-aimed (it intends to test "does it re-run the MILP" but hits "the tool surface cannot represent the question"), and **the estimate without any tool backing is the real risk this case accidentally measured**.
+
+The single rule-mode failure, `q-baseline-temp` (a thermal-strategy comparison routed to a temperature lookup), **passes** in real-model mode. The two modes fail in opposite directions, which is exactly why the two-tier routing is not redundancy: the long tail keywords cannot cover goes to the model, and the model cutting corners on recomputation goes to the rules. The catch rate stays below 1.0 because of one **registered blind spot**: the unit whitelist has no entry for `倍` ("times"), so ratio phrasings like "放电约为充电的 0.9 倍" never enter validation at all. That behaviour is pinned as an assertion in `tests/test_evals.py` (asserting the *miss*), and it turns red once the whitelist is completed. Full failing cases and calibers: [`evals/reports/rule-latest.md`](evals/reports/rule-latest.md) and [`evals/reports/llm-latest.md`](evals/reports/llm-latest.md); design rationale: [`evals/README.md`](evals/README.md).
+
+> Cross-mode comparison once produced a **false conclusion**: "regression of 5.4 points" was mostly a denominator difference (35 llm cases vs 32 rule cases). `compare_with_baseline()` now emits the same-denominator rate over the cases both sides actually covered and refuses to treat a cross-caliber delta as a gate result (`tests/test_evals.py::test_cross_mode_baseline_flags_denominator_mismatch`).
+
 > This evaluation caught a P0 on the day it shipped: the parameter regex for `SOC上限调到80%` used a greedy quantifier and actually captured `0`, so the system **ran a real MILP with SOC max = 0%** — and that utterance is an example sentence in this very README. Fix: `src/agents/chat_agent.py::_extract_params` and `tests/test_chat_agent.py::test_param_extraction_from_utterance`.
 
 ### Runtime tracing (trace)
@@ -517,7 +532,7 @@ coverage run -m pytest -o addopts= && coverage report
 ```
 > ⚠️ **PowerShell users**: `pytest -m ""` does not work there — the shell drops the empty argument and pytest reports `argument -m: expected one argument`. Clear the `pytest.ini` default `-m "not slow"` with `-o addopts=` as above, or use the equivalent `pytest -m "slow or not slow" -q`. Under Bash / zsh, `pytest -m ""` is fine.
 
-Test scale is **232 items** (200 fast plus 32 marked `slow`, of which 8 are `eval`-marked agent-behaviour evaluations), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 8 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 224 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
+Test scale is **233 items** (201 fast plus 32 marked `slow`, of which 8 are `eval`-marked agent-behaviour evaluations), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 8 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 225 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
 
 **Release gate = full `pytest` in CI.** The workflow has `workflow_dispatch`, so the full suite (including `slow`) can be triggered from the Actions page as the standard pre-release regression; if your machine cannot run pytest inside a restricted sandbox, use that entry point rather than substituting a weaker verification. If `tests/test_server_api.py` fails on its very first case with `PermissionError: [WinError 10013]`, that is the sandbox blocking the loopback `socketpair()` that `TestClient` depends on — an environment constraint, not a project defect; the test is whether the file passes on its own (`pytest tests/test_server_api.py -q`), and CI on `ubuntu-latest` is unaffected.
 
@@ -536,7 +551,7 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | `test_server_api.py` | API auth / forced first-login password change / rate limiting / SSRF |
 | `test_models_boundaries.py` | Numeric boundaries (division by zero / NaN / thermal model last point) |
 | `test_alerts_propagation.py` | Alert fields propagated end to end |
-| `test_evals.py` | The evaluation layer itself: denominators of the four dimensions, whether stubbing really blocks MILP, case-file integrity (30 items, no solver, no network) |
+| `test_evals.py` | The evaluation layer itself: denominators of the four dimensions, whether stubbing really blocks MILP, case-file integrity (31 items, no solver, no network) |
 | `test_evals_run.py` | Uses the evaluation layer on the agents: task success, number fidelity, side-effect guard, regression against `reports/baseline.json` (`eval + slow`) |
 | `test_parameter_search.py` | The four guardrails of the search agent (temperature violations not selectable, coarse-resolution numbers kept out of conclusions, budget and time limit, noise is not a win) + 1 real MILP run |
 | `test_trace.py` | Trace thread isolation, per-level redaction, decorator signature preservation, `/api/traces` auth and `run_id` never used as a path |
@@ -587,7 +602,9 @@ test(thermal): assert the thermal model's last-point boundary
 **AI capability**
 - **Explanation is single-day and post-hoc only**: no MPC rolling re-explanation; the parameter-search agent explores efficiency constraints only (SOC window, power ceiling), and safety policy items are excluded by design.
 - **The parameter-search agent is CLI-only**: not wired into the dashboard or `/api`, no rolling re-optimization, and the heuristic proposer is coordinate descent rather than global optimization.
-- **No real-model regression for the explanation layer**: all paths are covered by mocks (hallucination back-check and exception degradation included); one regression run is owed once a real key is attached.
+- **No output-side back-check on the chat path**: `check_grounding()` is attached to `LLMExplainer.explain()` (the schedule explanation) only, so chat answers are not checked. The real-model regression showed the consequence directly: the model computed 396.47 − 21.6 into "net revenue 374.9 CNY" and, with no tool to lean on, estimated a "400–700 CNY" range — neither would be caught. It is not wired in naively because that would **false-positive heavily**: the guard asks "did this number appear in the digest", while legitimate chat arithmetic necessarily produces numbers that did not. Doing it properly needs a derived-number tier (verifiable expressions), which is its own work item;
+- **One real-model regression is now done** (`deepseek-flash`, 2026-09-19): same-denominator task success 0.938, i.e. **worse** than the rule mode's 0.969, while number fidelity 1.000 and guard catch rate 0.750 match it; latency p50 5.1 s / p95 28.8 s. These metrics move with model and sampling, and this is **a single measured round** — switching models means re-running `python -m evals.run_eval --mode llm` (~350 s, 165k tokens);
+- **The grader is conservative by construction**: `must_contain` is keyword matching, and two of those keywords are surface symbols of the rule template (`✅`/`❌`). Semantic judging would need an LLM scorer, which is not implemented, so the 0.938 above should be read as a **lower bound**.
 
 **Engineering**
 - **Single-machine / intranet positioning**: public deployment means supplying your own reverse proxy, HTTPS, and password plus directory-permission hardening.
