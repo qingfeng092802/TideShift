@@ -21,7 +21,7 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 - **The cost of constraints, shown**: the thermal constraints give up 8.5% of revenue and bring peak temperature 57.12 → **46.99 ℃** (back inside the derating band, 8 ℃ below the shutdown threshold);
 - **Agent behaviour is measured**: offline rule mode, 32 cases → task success **0.969**, number fidelity **1.000**, fabricated-number catch rate **0.750**; with a real model (`deepseek-flash`) the same-denominator 32 cases drop to **0.938** — which two of the three losses are the grader's fault is written up in [`evals/`](evals/README.md);
 - **Tunes its own constraints and admits defeat honestly**: propose → evaluate on real MILP → re-verify at equal resolution; on this dataset it **did not beat the default constraints**, and the [report](docs/parameter-search-sample.md) says exactly that;
-- **Reproducible**: **233 tests** (201 fast + 32 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
+- **Reproducible**: **238 tests** (206 fast + 32 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
 > Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, slightly behind the naive baseline's 3.01%**; DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
 
 ![End-to-end demo: solve progress → overview → battery thermal → chat explanation](docs/screenshots/tideshift-demo.gif)
@@ -298,7 +298,7 @@ Once the server is up, `http://127.0.0.1:8800/docs` serves FastAPI's auto-genera
 | `POST` | `/api/explain` | Generate the explanation alone, returns `{text, source}`; `source` is `llm` / `rule` / `none` |
 | `POST` | `/api/chat` · `/api/chat/stream` · `/api/chat/clear` | Chat agent (SSE streaming included), returns `{reply, history, mode}`; `mode` is `rule` / `llm` |
 | `GET` | `/api/chat/history` | Chat history |
-| `GET` | `/api/traces` | Recent runs (summary, incl. the slowest step); `limit` capped at 50 |
+| `GET` | `/api/traces` | Recent runs (summary incl. the slowest step, plus `meta`: redaction level / ring capacity / kept); `limit` capped at 50 |
 | `GET` | `/api/traces/{run_id}` | Full event sequence of one run, read from the in-memory ring only (404 when unknown) |
 
 ## Configuration
@@ -478,15 +478,18 @@ The single rule-mode failure, `q-baseline-temp` (a thermal-strategy comparison r
 `src/utils/trace.py`. Logs answer "where did something error"; a trace answers "**in this specific run**, how long did each step take, which path did the LLM take, and at which step did a number change". Without it, the only way to debug an agent is to re-run it and watch.
 - **Carrier**: every run (one solve, one chat turn, one explanation, one search loop) writes a single JSON line to `logs/traces/trace-YYYYMMDD.jsonl` and also enters a bounded in-process ring buffer so endpoints can read it live. No Langfuse / OTel — this project's caliber is full offline capability.
 - **Instrumented points**: the background solve thread of `/api/solve`, `/api/chat`, `/api/chat/stream`, `/api/explain`, every solve issued by the parameter-search agent, and the explanation layer's LLM calls (including the degradation reason).
-- **Endpoints**: `GET /api/traces?limit=20` for summaries (including the slowest step), `GET /api/traces/{run_id}` for the complete event sequence. Both sit behind JWT; `run_id` is only an in-memory lookup key and is **never concatenated into a file path**.
+- **Endpoints**: `GET /api/traces?limit=20` returns summaries (including the slowest step) plus `meta` (current redaction level, ring capacity, entries kept); `GET /api/traces/{run_id}` returns the complete event sequence. Both sit behind JWT; `run_id` is only an in-memory lookup key, **never concatenated into a file path**, and the absolute log directory is never returned either.
+- **Dashboard page**: "Runtime tracing" in the sidebar is this layer's read-only view — a recent-runs table (whole-run duration / step count / error count / slowest step) and, on row click, the event sequence of one run with a proportional bar per step. The page explains up front **why it cannot show your question text**: level and capacity come from the endpoint's `meta`, so the frontend never copies a default that could drift away from the real configuration.
 - **No business content on disk by default**: level `basic` records event names, durations, status and length counters (the question text becomes `question_len`); only `full` records text. A conversation may contain load data the user uploaded, so it is not written out by default.
 - **The two spots most likely to break have dedicated tests**: the active run is **thread-local** (the solve runs on a background thread — a module-level global would mix events from concurrent requests into one run, making the trace false evidence), and `@trace.traced` preserves the signature via `functools.wraps`, otherwise FastAPI cannot inject the request model.
+- **Why the solve is slow has to be visible**: `forecast` and `milp_optimize` are traced steps (both orchestration engines use the same step names), otherwise a "scheduling solve 50.97 s" row would be followed by nothing — one total explains nothing. Measured on a real solve: `forecast 3.39 s` + `milp_optimize 47.47 s`.
+- **A caliber bug the new page caught on the day it shipped**: `/api/chat/stream` was wrapped with `@trace.traced`, but the decorator's `with` block exits as soon as the *generator object is created* — the real LLM and tool work happens later, while the stream is consumed. The recorded run was therefore **sub-millisecond, zero steps, empty attributes**, which looks absurd in the list at a glance. The run is now opened inside the generator. A client that disconnects early raises `GeneratorExit` (a `BaseException`, so the old `except Exception` never saw it); without a terminal status the page would keep a zombie run marked "in progress" forever, so it is now recorded as `aborted:GeneratorExit` and rendered as "aborted". Both are tested: `test_chat_stream_run_is_traced_from_inside`, `test_abandoned_stream_gets_a_terminal_status`.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces?limit=5"
 curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run_id>"
 ```
-> Not done yet: the dashboard has **no tracing page**. `/api/traces` is curl-able; the UI is left for a later pass.
+> Not done yet: the page reads the **in-process ring** only (64 runs by default) — no browsing of `logs/traces/*.jsonl`, no search across restarts, and no auto-refresh; you have to re-enter the page to reload it.
 
 ## Measured results
 1MW/2MWh C&I LFP storage, Guangdong peak-valley industrial/commercial tariff, dispatch day 2024-07-30:
@@ -532,7 +535,7 @@ coverage run -m pytest -o addopts= && coverage report
 ```
 > ⚠️ **PowerShell users**: `pytest -m ""` does not work there — the shell drops the empty argument and pytest reports `argument -m: expected one argument`. Clear the `pytest.ini` default `-m "not slow"` with `-o addopts=` as above, or use the equivalent `pytest -m "slow or not slow" -q`. Under Bash / zsh, `pytest -m ""` is fine.
 
-Test scale is **233 items** (201 fast plus 32 marked `slow`, of which 8 are `eval`-marked agent-behaviour evaluations), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 8 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 225 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
+Test scale is **238 items** (206 fast plus 32 marked `slow`, of which 8 are `eval`-marked agent-behaviour evaluations), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 8 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 230 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
 
 **Release gate = full `pytest` in CI.** The workflow has `workflow_dispatch`, so the full suite (including `slow`) can be triggered from the Actions page as the standard pre-release regression; if your machine cannot run pytest inside a restricted sandbox, use that entry point rather than substituting a weaker verification. If `tests/test_server_api.py` fails on its very first case with `PermissionError: [WinError 10013]`, that is the sandbox blocking the loopback `socketpair()` that `TestClient` depends on — an environment constraint, not a project defect; the test is whether the file passes on its own (`pytest tests/test_server_api.py -q`), and CI on `ubuntu-latest` is unaffected.
 
@@ -554,7 +557,7 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | `test_evals.py` | The evaluation layer itself: denominators of the four dimensions, whether stubbing really blocks MILP, case-file integrity (31 items, no solver, no network) |
 | `test_evals_run.py` | Uses the evaluation layer on the agents: task success, number fidelity, side-effect guard, regression against `reports/baseline.json` (`eval + slow`) |
 | `test_parameter_search.py` | The four guardrails of the search agent (temperature violations not selectable, coarse-resolution numbers kept out of conclusions, budget and time limit, noise is not a win) + 1 real MILP run |
-| `test_trace.py` | Trace thread isolation, per-level redaction, decorator signature preservation, `/api/traces` auth and `run_id` never used as a path |
+| `test_trace.py` | Trace thread isolation, per-level redaction, decorator signature preservation, `/api/traces` auth and `run_id` never used as a path, caliber reported back, terminal status on abandoned streams, sidebar/renderer/section wiring (22 items) |
 
 ## FAQ
 

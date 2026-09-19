@@ -9,6 +9,7 @@ LangGraph 版本调度协调器
 与原 CoordinatorAgent 接口完全兼容，可直接替换使用。
 """
 from src.utils.logger import get_logger
+from src.utils import trace
 log = get_logger(__name__)
 import operator
 import numpy as np
@@ -126,10 +127,13 @@ def load_forecast_node(state: SchedulingState) -> Dict:
     use_ml = state.get("use_ml_forecast", True)
 
     try:
-        if use_ml:
-            forecast = agent.predict(historical_data, date, apply_physical_correction=True)
-        else:
-            forecast = agent.predict_simple(historical_data, date, apply_physical_correction=True)
+        # 环节名与纯 Python 编排保持一致（forecast / milp_optimize），
+        # 否则同一个追溯页会因为换了编排引擎而一半有步骤、一半没步骤。
+        with trace.span("forecast", ml=use_ml):
+            if use_ml:
+                forecast = agent.predict(historical_data, date, apply_physical_correction=True)
+            else:
+                forecast = agent.predict_simple(historical_data, date, apply_physical_correction=True)
 
         log.info(f"  预测完成，MAPE: {forecast.mape}%")
         log.info(f"  物理修正幅度: {forecast.correction_magnitude_kw:.1f} kW")
@@ -167,14 +171,15 @@ def storage_optimization_node(state: SchedulingState) -> Dict:
     log.info("\n[LangGraph] ▶ storage_optimization_node：储能优化调度Agent")
 
     agent = StorageOptimizationAgent(active_config())
-    schedule = agent.optimize(
-        price_profile=state["price_profile"],
-        load_profile=state["load_profile"],
-        ambient_temp_profile=state["ambient_temp_profile"],
-        initial_soc=state.get("current_soc", 0.5),
-        include_thermal_constraint=state.get("include_thermal", True),
-        include_degradation_cost=state.get("include_degradation", True),
-    )
+    with trace.span("milp_optimize"):
+        schedule = agent.optimize(
+            price_profile=state["price_profile"],
+            load_profile=state["load_profile"],
+            ambient_temp_profile=state["ambient_temp_profile"],
+            initial_soc=state.get("current_soc", 0.5),
+            include_thermal_constraint=state.get("include_thermal", True),
+            include_degradation_cost=state.get("include_degradation", True),
+        )
 
     log.info(f"  求解状态: {schedule.solver_status}")
     log.info(f"  基准套利收益: {schedule.arbitrage_revenue_yuan:.2f} 元")

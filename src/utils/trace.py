@@ -161,6 +161,12 @@ def run(kind: str, **attrs: Any) -> Iterator[Optional[RunTrace]]:
     except Exception as exc:
         rt.status = f"error:{type(exc).__name__}"
         raise
+    except BaseException as exc:
+        # GeneratorExit / asyncio.CancelledError：SSE 客户端中途断开，或请求任务被取消。
+        # 必须落一个终态，否则这条运行会永远停在 "running"，追溯页上就是一只
+        # 显示"进行中"、其实早就死掉的僵尸运行。
+        rt.status = f"aborted:{type(exc).__name__}"
+        raise
     else:
         if rt.status == "running":
             rt.status = "ok"

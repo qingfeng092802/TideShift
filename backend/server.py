@@ -1536,13 +1536,17 @@ def chat(req: ChatReq):
 
 
 @app.post("/api/chat/stream")
-@trace.traced("chat_stream")
 async def chat_stream(req: ChatReq):
     """流式对话（SSE）。
 
     协议：逐条 `data: {"delta": "..."}`，结束发 `data: {"done": true, "history": [...]}`。
     是否真正逐字由 llm_params.stream 决定——前端只实现一套解析逻辑：
     开关关闭时服务端一次性发出整段 delta，视觉上等同「整段返回」。
+
+    ⚠️ 追溯 run 开在 `gen()` **里面**，不能用 `@trace.traced` 包这个端点：装饰器的
+    `with` 只圈到"生成器对象被创建"那一刻就退出，真正的 LLM 调用与工具执行发生在
+    之后被逐块消费时。那样记出来的运行是亚毫秒、0 环节——追溯页会拿到一个看起来
+    正常、其实什么都没量的数字（这个错就是这么被追溯页发现的）。
     """
     if not ensure_solved():
         raise HTTPException(409, "not solved")
@@ -1565,31 +1569,35 @@ async def chat_stream(req: ChatReq):
 
     async def gen():
         acc = []
-        try:
-            if use_stream:
-                async for delta in agent.astream(req.message):
-                    acc.append(delta)
-                    yield _sse({"delta": delta})
-            else:
-                text = agent.respond(req.message)
-                acc.append(text)
-                yield _sse({"delta": text})
-        except Exception as e:
-            msg = f"⚠️ 对话Agent异常：{type(e).__name__}: {e}"
-            acc.append(msg)
-            yield _sse({"delta": msg})
+        with trace.run("chat_stream",
+                       mode=getattr(agent, "mode", "unknown"),
+                       date=s.selected_date, stream=use_stream,
+                       question_len=len(req.message or "")):
+            try:
+                if use_stream:
+                    async for delta in agent.astream(req.message):
+                        acc.append(delta)
+                        yield _sse({"delta": delta})
+                else:
+                    text = agent.respond(req.message)
+                    acc.append(text)
+                    yield _sse({"delta": text})
+            except Exception as e:
+                msg = f"⚠️ 对话Agent异常：{type(e).__name__}: {e}"
+                acc.append(msg)
+                yield _sse({"delta": msg})
 
-        response = "".join(acc) or "（空回复）"
-        s.chat_history.append({"role": "assistant", "content": response})
-        if len(s.chat_history) > 200:
-            del s.chat_history[:-200]
-        # 与 /api/chat 一致：工具可能重跑调度 → 同步最新结果
-        if ctx.report is not None and ctx.report is not s.report:
-            with s.lock:
-                s.coordinator, s.report, s.baseline, s.viz = (
-                    ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data)
-        yield _sse({"done": True, "history": s.chat_history[-16:],
-                    "mode": getattr(agent, "mode", "unknown")})
+            response = "".join(acc) or "（空回复）"
+            s.chat_history.append({"role": "assistant", "content": response})
+            if len(s.chat_history) > 200:
+                del s.chat_history[:-200]
+            # 与 /api/chat 一致：工具可能重跑调度 → 同步最新结果
+            if ctx.report is not None and ctx.report is not s.report:
+                with s.lock:
+                    s.coordinator, s.report, s.baseline, s.viz = (
+                        ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data)
+            yield _sse({"done": True, "history": s.chat_history[-16:],
+                        "mode": getattr(agent, "mode", "unknown")})
 
     return StreamingResponse(
         gen(), media_type="text/event-stream",

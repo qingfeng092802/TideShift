@@ -12,6 +12,7 @@
 - 可选使用LangGraph编排（需安装langgraph）
 """
 from src.utils.logger import get_logger
+from src.utils import trace
 log = get_logger(__name__)
 import numpy as np
 import pandas as pd
@@ -149,14 +150,17 @@ class CoordinatorAgent:
         # ===== 阶段1：负荷预测 =====
         log.info("\n[阶段1/4] 负荷预测Agent运行中...")
         try:
-            if use_ml_forecast:
-                forecast = self.load_agent.predict(
-                    historical_data, date, apply_physical_correction=True
-                )
-            else:
-                forecast = self.load_agent.predict_simple(
-                    historical_data, date, apply_physical_correction=True
-                )
+            # 环节名进 trace：追溯页要能回答"49 秒里哪一段吃掉的"，
+            # 只有整轮耗时的那一行等于什么都没解释。
+            with trace.span("forecast", ml=use_ml_forecast):
+                if use_ml_forecast:
+                    forecast = self.load_agent.predict(
+                        historical_data, date, apply_physical_correction=True
+                    )
+                else:
+                    forecast = self.load_agent.predict_simple(
+                        historical_data, date, apply_physical_correction=True
+                    )
             self.state.forecast_result = forecast
             self.state.load_profile = forecast.forecast_load_kw
 
@@ -186,14 +190,15 @@ class CoordinatorAgent:
 
         # ===== 阶段2：储能优化调度 =====
         log.info("\n[阶段2/4] 储能优化调度Agent运行中...")
-        base_schedule = self.storage_agent.optimize(
-            price_profile=self.state.price_profile,
-            load_profile=self.state.load_profile,
-            ambient_temp_profile=self.state.ambient_temp_profile,
-            initial_soc=self.state.current_soc,
-            include_thermal_constraint=include_thermal,
-            include_degradation_cost=include_degradation,
-        )
+        with trace.span("milp_optimize"):
+            base_schedule = self.storage_agent.optimize(
+                price_profile=self.state.price_profile,
+                load_profile=self.state.load_profile,
+                ambient_temp_profile=self.state.ambient_temp_profile,
+                initial_soc=self.state.current_soc,
+                include_thermal_constraint=include_thermal,
+                include_degradation_cost=include_degradation,
+            )
         self.state.base_schedule = base_schedule
 
         log.info(f"  求解状态: {base_schedule.solver_status}")

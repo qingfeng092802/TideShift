@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""FastAPI 层 API 安全测试（此前 1273 行 27 个端点零测试）
+"""FastAPI 层 API 安全测试（这一层曾经整层零测试）
 
 覆盖：未登录 401、登录成功拿 token、must_change 强制拦截、
-登录限流、SSRF 黑名单、会话隔离。
+登录限流、SSRF 黑名单、会话隔离、SSE 端点的追溯口径。
 不触发 MILP 求解——全部是秒级安全语义测试。
 """
 import os
@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 import server  # noqa: E402  backend/server.py
+from src.utils import trace  # noqa: E402
 from src.utils.url_guard import SSRFBlockedError, assert_safe_llm_url  # noqa: E402
 
 
@@ -148,6 +149,30 @@ def test_chat_response_exposes_mode(client, monkeypatch):
     assert "reply" in body and "history" in body
     # 无 API Key 时工厂必定返回规则模式 Agent
     assert body.get("mode") in ("rule", "llm"), body
+
+
+def test_chat_stream_run_is_traced_from_inside(client, monkeypatch):
+    """SSE 端点的追溯 run 必须开在生成器**内部**。
+
+    用 `@trace.traced` 包端点时，`with` 只圈到"生成器对象被创建"就退出，
+    真正消费发生在之后 —— 记出来的运行是亚毫秒、属性全空，追溯页拿到一个
+    看起来正常其实什么都没量的数字。所以这里断言的是"属性齐全"，
+    它只有在生成器内部开 run 才可能成立。
+    """
+    monkeypatch.setattr(server, "ensure_solved", lambda: True)
+    trace.reset()
+    hdr = _auth_headers(client)
+    msg = "今天的收益是多少"
+    r = client.post("/api/chat/stream", headers=hdr, json={"message": msg})
+    assert r.status_code == 200, r.text
+    assert '"done"' in r.text
+    runs = [x for x in trace.recent(limit=50) if x["kind"] == "chat_stream"]
+    assert runs, "流式对话没留下任何运行记录"
+    last = runs[-1]
+    assert last["status"] == "ok"
+    assert last["attrs"]["question_len"] == len(msg)
+    assert last["attrs"]["mode"] in ("rule", "llm")
+    assert "stream" in last["attrs"]
 
 
 def test_env_mode_login_creates_no_auth_file(client, tmp_path, monkeypatch):
