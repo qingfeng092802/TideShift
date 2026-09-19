@@ -33,6 +33,12 @@
 > 三件不回避的事：内置 `data/` 是**合成演示数据**；负荷预测 XGBoost **3.12% MAPE 略输朴素基线的 3.01%**；
 > 需求响应按"放电量 × 补贴"结算，**尚未建模 CBL 基线**。全部列在[已知局限与路线图](#已知局限与路线图)。
 
+![端到端演示：求解进度 → 数据总览 → 电池热管理 → 对话解释](docs/screenshots/tideshift-demo.gif)
+
+> 上图为**真实运行录屏**（非设计稿）：headless Chromium 驱动本机服务跑完整链路，内置演示数据、
+> 调度日 2024-07-15；**未配置 LLM Key**，所以右侧对话是规则模板解释——它自己也把来源标了出来。
+> 19.8 秒 / 0.43 MB / 无限循环。静态截图见[界面预览](#界面预览)。
+
 > **项目定位**：一个面向交流与教学的**参考实现 / 演示系统**（reference implementation），不是可直接投产的调度产品。
 > 内置的收益测算建立在若干简化假设之上（见[已知局限与路线图](#已知局限与路线图)），
 > **不构成**调度决策、财务结算或容量规划的依据。
@@ -723,6 +729,7 @@ CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC
 | **首页打不开调度数据，返回 409** | 尚未求解。点击「开始求解」触发一次完整流程即可 |
 | **端口 8800 被占用** | 改 `ENERGY_PORT` 环境变量，或使用 `restart_backend.bat`（会先释放端口） |
 | **求解明显变慢（分钟级）** | 多半是 `highspy` 未装上，`pulp.HiGHS` 抛异常后静默回退到 CBC（约慢 4~5 倍）。检查 `pip show highspy` |
+| **页面报「echarts is not defined」，图表全空白** | 本地工作树的 `web/vendor/echarts.min.js` 带了 CRLF，而 `<script>` 上有 SRI `integrity` 校验 —— 差 40 个字节就哈希不符，浏览器直接拒绝执行。多见于在 `.gitattributes` 之前检出过的老工作树（新克隆不会遇到）。修复：`git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js`（`web/css/app.css`、`web/js/markdown.js` 同理，它们没有 SRI 所以只是不美观） |
 | **解释层一直是"规则模板"** | 未配置 LLM Key，或 Key 无效/网络不通——这是设计好的降级行为，不影响主流程 |
 | **上传数据后预测精度很差** | 历史数据不足 11 天会降级为朴素基线且不做物理修正，总览页会有降级告警。门槛由 `required_history_days()` 推算：滞后特征 7 天 + 测试集 3 天 + 训练下限 1 天 |
 | **DR 事件是从 `data/load/dr_signals.csv` 读的吗？** | **不是**。Web 流程按当前所选调度日**自动生成**两组默认 DR 事件（15:00–17:00 / 19:30–20:30），另支持页面手工触发与 `POST /api/dr/trigger`。`dr_signals.csv` 只是离线示例数据，其加载函数 `load_dr_signals()` 目前仅被测试引用，不在 Web 链路上——不要误以为改这个 CSV 能改变界面上的 DR 事件 |
