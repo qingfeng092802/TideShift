@@ -678,7 +678,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run
 | 最高电池温度 | 42.3 ℃ | 46.99 ℃（降额区） | 57.12 ℃（越过 55 ℃ 停机阈值） |
 | 求解时间 | < 0.1 s | 40 ~ 43 s（HiGHS，`mip_gap` 默认 **1%**） | 24.1 s |
 
-> 复现环境：Python 3.13.14 + `requirements.lock`。本表「日净收益」统一为**套利 − 衰减**（不含 DR 补贴），与基准同口径。
+> 复现环境：Python 3.13 系（本轮复核跑在 **3.13.9 / Anaconda**；`requirements.lock` 由更早的
+> 3.13.14 环境生成，CI 用 3.13——补丁号不写成硬要求，因为本机并不是当初生成锁文件的那个解释器）。本表「日净收益」统一为**套利 − 衰减**（不含 DR 补贴），与基准同口径。
 >
 > **本表口径已在本轮重新复现通过**：`use_ml_forecast=True`、`include_thermal=True`、`initial_soc=0.5`、
 > DR 用页面默认两事件、`mip_gap` 取代码默认 1%；整轮 42.7 s，报表 套利 1702.79 / 衰减 504.67 /

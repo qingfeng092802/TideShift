@@ -9,7 +9,7 @@ README 只保留结论与关键数字，明细与口径说明放这里，便于�
 
 | 项 | 值 |
 |---|---|
-| Python | 3.13.14 |
+| Python | 3.13 系（本文件 2026-09-19 这轮复核用的解释器是 **3.13.9 / Anaconda**；`requirements.lock` 由更早的 3.13.14 环境生成，CI 用 3.13） |
 | 依赖 | `pip install -r requirements.lock`（逐版本锁定） |
 | 操作系统 | Windows 10 |
 | 调度日 | 2024-07-30 |
