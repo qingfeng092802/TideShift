@@ -154,11 +154,16 @@ def build_env(date: Optional[str] = None, use_ml_forecast: Optional[bool] = None
         use_ml_forecast=ml, include_thermal=True, include_degradation=True)
 
     import numpy as np
-    import pandas as pd
-    tidx = pd.date_range(day, periods=CONFIG.battery.num_steps,
-                         freq="15min")
-    price = np.asarray(generate_price_profile(tidx), dtype=float)
-    amb = np.asarray(generate_ambient_temp(tidx), dtype=float)
+    from src.data.data_loader import day_price_temp
+    # 与协调器同源取当日序列：`generate_ambient_temp` 含未播种噪声，直接调它会让
+    # baseline 每天抽一条新气温曲线，评测里的对比项就跟着漂。
+    pt = day_price_temp(hist, day)
+    if pt is None:
+        import pandas as pd
+        tidx = pd.date_range(day, periods=CONFIG.battery.num_steps, freq="15min")
+        pt = (np.asarray(generate_price_profile(tidx), dtype=float),
+              np.asarray(generate_ambient_temp(tidx), dtype=float))
+    price, amb = pt
     baseline = StorageOptimizationAgent(CONFIG).baseline_strategy(price, amb)
 
     viz = coord.get_visualization_data()

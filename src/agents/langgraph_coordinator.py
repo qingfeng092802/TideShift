@@ -174,7 +174,6 @@ def storage_optimization_node(state: SchedulingState) -> Dict:
     with trace.span("milp_optimize"):
         schedule = agent.optimize(
             price_profile=state["price_profile"],
-            load_profile=state["load_profile"],
             ambient_temp_profile=state["ambient_temp_profile"],
             initial_soc=state.get("current_soc", 0.5),
             include_thermal_constraint=state.get("include_thermal", True),

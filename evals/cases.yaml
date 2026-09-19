@@ -255,14 +255,21 @@ cases:
 # planted_numbers = 故意埋进回答里、事实摘要中不存在的数字，期望全部被拦。
 # 不埋数字的用例（planted_numbers 为空）用来量**误报率**：真数字被错拦同样是不合格。
 # 模板里的 {字段} 由 evals/grounding.py 用 DecisionDigest 的真实值填充。
+#
+# **埋的数必须"真的不在摘要里"**：守卫按 |v−t| ≤ 0.01·|t| + 0.05 判命中，所以与任何
+# 真实值相差 0.05 元以内的编造数字会被直接放行。这里曾经埋 `0.87 元/kWh`，电价日历
+# 改成 331 号文口径后摘要里出现了 `0.88`（窗口均价取整），0.87 于是"不再是编造"，
+# 捕获率从 0.750 掉到 0.500 —— 不是守卫退化，是探针与真实值相撞。
+# 现在由 tests/test_evals_run.py::test_planted_numbers_are_not_accidentally_grounded
+# 守住这条：口径再变导致相撞时，那条测试会红并点名相撞的真实值，而不是让指标悄悄漂移。
 # ==============================================================================
 grounding_probes:
   - id: gp-fabricated-money
     desc: "两个摘要里不存在的金额混在一个真数字后面"
-    planted_numbers: [4521.00, 0.87]
+    planted_numbers: [4521.00, 1.62]
     answer_template: |
       今日净收益 {net_revenue_yuan:.2f} 元。若按明年电价情景外推，可达 4521.00 元，
-      折合度电成本 0.87 元/kWh。
+      折合度电成本 1.62 元/kWh。
 
   - id: gp-fabricated-temp
     desc: "编造一个越限温度"

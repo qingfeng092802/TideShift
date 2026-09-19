@@ -1,7 +1,8 @@
 """
 数据生成器
 生成符合真实特征的工商业负荷、电价、气象数据
-数据特征参考：NREL商业建筑负荷数据集 + 广东省工商业峰谷电价
+负荷/气温特征参考：NREL商业建筑负荷数据集（合成，非实测）；
+电价口径参考：粤发改价格〔2021〕331 号（时段划分见 PRICE_PERIODS，出处见 data/README.md）
 """
 import numpy as np
 import pandas as pd
@@ -105,39 +106,68 @@ def generate_load_profile(
 
 def generate_price_profile(time_idx: pd.DatetimeIndex) -> np.ndarray:
     """
-    生成广东省工商业峰谷分时电价（96点/天）
-    时段划分（参考广东2024年政策）：
-    - 尖峰：11:00-12:00, 15:00-17:00, 19:00-21:00（夏冬季）
-    - 高峰：8:00-11:00, 13:00-15:00, 17:00-19:00, 21:00-23:00
-    - 平段：7:00-8:00, 12:00-13:00, 23:00-24:00
-    - 低谷：0:00-7:00
+    生成广东省工商业峰谷分时电价（96 点/天）。
+
+    时段与浮动比例按 **粤发改价格〔2021〕331 号**《关于进一步完善我省峰谷分时电价
+    政策有关问题的通知》（2021-08-31）原文设定，出处与换算见 `data/README.md`：
+
+        高峰时段为 10-12 点、14-19 点；低谷时段为 0-8 点；其余为平段。
+        尖峰电价执行时间为 7 月、8 月和 9 月三个整月，每天执行时段为
+        11-12 时、15-17 时共三个小时，在高峰电价基础上上浮 25%。
+        峰 : 平 : 谷 = 1.7 : 1 : 0.38
+
+    此前这里没有月份维度：尖峰全年生效，还把 19:00-21:00 也算进尖峰、低谷只给
+    0-7 点——与原文不符，等于用"全年天天尖峰"的日历支撑"广东峰谷电价"这句话。
     """
     hours = _hour_float(time_idx)
     p = active_config().price
-    return np.array([price_by_hour(h, p) for h in hours])
+    return np.array([price_by_hour(h, month=int(m), price_cfg=p)
+                     for h, m in zip(hours, time_idx.month)])
 
 
-# 单一事实来源：时段划分同时供 generate_price_profile、/api/bootstrap 前端下发与一致性测试使用
+# 单一事实来源：时段划分同时供 generate_price_profile、/api/bootstrap 前端下发与一致性测试使用。
+# months=None 表示全年生效；有值表示仅这些月份生效（尖峰）。
+# 匹配规则是"窗口最窄者胜"，**不依赖列表顺序**——尖峰窗口是高峰窗口的子集，
+# 靠顺序取胜的写法一旦有人调整顺序就会静默改变电价。
 PRICE_PERIODS = [
-    {"name": "低谷", "cls": "st-ok", "hours": "00:00-07:00",
-     "range": [(0, 7)], "price_field": "valley_price"},
-    {"name": "平段", "cls": "st-neutral", "hours": "07:00-08:00, 12:00-13:00, 23:00-24:00",
-     "range": [(7, 8), (12, 13), (23, 24)], "price_field": "flat_price"},
-    {"name": "高峰", "cls": "st-warn", "hours": "08:00-11:00, 13:00-15:00, 17:00-19:00, 21:00-23:00",
-     "range": [(8, 11), (13, 15), (17, 19), (21, 23)], "price_field": "peak_price"},
-    {"name": "尖峰", "cls": "st-danger", "hours": "11:00-12:00, 15:00-17:00, 19:00-21:00",
-     "range": [(11, 12), (15, 17), (19, 21)], "price_field": "spike_price"},
+    {"name": "低谷", "cls": "st-ok", "hours": "00:00-08:00",
+     "range": [(0, 8)], "price_field": "valley_price", "months": None},
+    {"name": "平段", "cls": "st-neutral", "hours": "08:00-10:00, 12:00-14:00, 19:00-24:00",
+     "range": [(8, 10), (12, 14), (19, 24)], "price_field": "flat_price", "months": None},
+    {"name": "高峰", "cls": "st-warn", "hours": "10:00-12:00, 14:00-19:00",
+     "range": [(10, 12), (14, 19)], "price_field": "peak_price", "months": None},
+    {"name": "尖峰", "cls": "st-danger", "hours": "11:00-12:00, 15:00-17:00（仅 7/8/9 月）",
+     "range": [(11, 12), (15, 17)], "price_field": "spike_price", "months": (7, 8, 9)},
 ]
 
 
-def price_by_hour(h: float, price_cfg=None) -> float:
-    """按单一事实来源 PRICE_PERIODS 返回 h 小时的电价。"""
+def price_by_hour(h: float, *, month: int = None, price_cfg=None) -> float:
+    """按单一事实来源 PRICE_PERIODS 返回 h 小时的电价（元/kWh）。
+
+    `month` 决定尖峰是否生效；传 None 表示调用方没有月份上下文，此时**尖峰档不参与
+    匹配**（宁可少收不多收），11-12 / 15-17 按高峰计价。
+
+    `month` 与 `price_cfg` 都是关键字参数：原先 `price_cfg` 是第二个位置参数，
+    若把 `month` 插在中间，老调用 `price_by_hour(h, cfg)` 会把配置对象当成月份——
+    不报错，但静默算错价。
+    """
     p = price_cfg or active_config().price
+    if not (0.0 <= h < 24.0):
+        raise ValueError(f"小时数越界：{h}（应为 0 ≤ h < 24）")
+    best, best_span = None, None
     for period in PRICE_PERIODS:
+        months = period.get("months")
+        if months is not None and (month is None or month not in months):
+            continue
         for lo, hi in period["range"]:
             if lo <= h < hi:
-                return getattr(p, period["price_field"])
-    return p.flat_price
+                if best_span is None or (hi - lo) < best_span:
+                    best, best_span = period, hi - lo
+                break
+    if best is None:
+        # 时段表被改漏了区间。以前这里静默回落到平段价，会把漏洞藏成"看起来正常的电价"。
+        raise ValueError(f"电价时段表存在未覆盖的空隙：h={h}, month={month}")
+    return getattr(p, best["price_field"])
 
 
 def generate_dr_signals(time_idx: pd.DatetimeIndex, num_events: int = 2,
@@ -153,8 +183,10 @@ def generate_dr_signals(time_idx: pd.DatetimeIndex, num_events: int = 2,
                        避免事件日期与调度日不匹配；不提供时在全部日期中随机选择。
     """
     events = []
-    # 在高峰时段随机生成DR事件
-    peak_hours = [10, 11, 14, 15, 16, 19, 20]
+    # 在高峰/尖峰时段随机生成 DR 事件。窗口取自 331 号文：高峰 10-12、14-19，
+    # 尖峰 11-12、15-17（仅 7/8/9 月）。19、20 点在新口径下是平段，削峰事件落在那里
+    # 语义就错了——所以整点集合止于 18。
+    peak_hours = [10, 11, 14, 15, 16, 17, 18]
     days = time_idx.normalize().unique()
 
     if schedule_date is not None:
@@ -187,6 +219,9 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
     Args:
         schedule_date: 调度日（'YYYY-MM-DD'），传入后DR事件固定在该日生成。
     """
+    # 行尾显式指定 LF：pandas 默认按 os.linesep 写，Windows 上会造出 CRLF 的 CSV，
+    # 与 .gitattributes 钉的 `* text=auto eol=lf` 相反（入库时虽会归一化，但工作树的
+    # 字节就和新克隆的不一致，按字节比对/哈希的脚本会误判）。
     np.random.seed(seed)
 
     time_idx = generate_time_index(days=days)
@@ -203,22 +238,26 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
     df = pd.DataFrame({
         "timestamp": time_idx,
         "load_kw": load.round(2),
-        "price_yuan_per_kwh": price.round(4),
+        # round(5)：尖峰 1.38125 有 5 位小数，取到 4 位会让内置 CSV 与 PriceConfig 不一致
+        "price_yuan_per_kwh": price.round(5),
         "ambient_temp_c": ambient_temp.round(2),
         "hour": np.asarray(time_idx.hour),
         "weekday": np.asarray(time_idx.weekday),
         "is_weekend": (np.asarray(time_idx.weekday) >= 5).astype(int),
     })
-    df.to_csv(save_path / "load" / "load_data.csv", index=False, encoding="utf-8-sig")
+    df.to_csv(save_path / "load" / "load_data.csv", index=False, encoding="utf-8-sig",
+              lineterminator="\n")
 
     # 电价表（单独保存典型日）
     typical_day = df[df["timestamp"].dt.date == df["timestamp"].dt.date.iloc[0]]
     typical_day[["timestamp", "price_yuan_per_kwh"]].to_csv(
-        save_path / "price" / "typical_price.csv", index=False, encoding="utf-8-sig"
+        save_path / "price" / "typical_price.csv", index=False,
+        encoding="utf-8-sig", lineterminator="\n"
     )
 
     # DR信号
-    dr_signals.to_csv(save_path / "load" / "dr_signals.csv", index=False, encoding="utf-8-sig")
+    dr_signals.to_csv(save_path / "load" / "dr_signals.csv", index=False,
+                    encoding="utf-8-sig", lineterminator="\n")
 
     # 电池参数
     battery_params = pd.DataFrame([
@@ -236,7 +275,8 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
         {"parameter": "cycle_life", "value": active_config().battery.cycle_life},
         {"parameter": "battery_cost_per_kwh", "value": active_config().battery.battery_cost_per_kwh},
     ])
-    battery_params.to_csv(save_path / "battery" / "battery_params.csv", index=False, encoding="utf-8-sig")
+    battery_params.to_csv(save_path / "battery" / "battery_params.csv", index=False,
+                        encoding="utf-8-sig", lineterminator="\n")
 
     print(f"数据生成完成：")
     print(f"  - 负荷数据：{len(df)} 条 ({days}天 × 96点)")

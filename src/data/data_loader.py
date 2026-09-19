@@ -40,3 +40,20 @@ def get_day_data(df: pd.DataFrame, date: str) -> pd.DataFrame:
     """获取指定日期的96点数据"""
     mask = df["timestamp"].dt.date == pd.to_datetime(date).date()
     return df[mask].reset_index(drop=True)
+
+
+def day_price_temp(df: pd.DataFrame, date: str, num_steps: int = 96):
+    """取当日 (电价, 气温) 两条序列；该日不足 num_steps 行时返回 None。
+
+    存在的理由是**可复现**：`data_generator.generate_ambient_temp` 内含一行未播种的
+    `np.random.normal(0, 0.8, n)`，谁调用它就现场抽一条新曲线。寻优 Agent 与评测
+    harness 此前都直接调它，于是"同一配置重复求解实测能差约 1%"这句写在代码里的话
+    其实是错的——差的不是解，是输入（24 点默认约束连跑四次 1352.18 ~ 1392.01 元，
+    极差 2.9%，比 2% 的胜出门槛还大；同一组输入重复求解则逐分不差）。
+    要评估某一天，就用那一天真正落盘的序列。
+    """
+    day = get_day_data(df, date)
+    if len(day) != num_steps:
+        return None
+    return (day["price_yuan_per_kwh"].to_numpy(dtype=float),
+            day["ambient_temp_c"].to_numpy(dtype=float))

@@ -30,6 +30,16 @@ BAT = CFG.battery
 
 
 def _profiles(date="2024-07-30"):
+    """当日电价与气温：优先取内置数据集里那一天真正落盘的序列。
+
+    不直接调 `generate_*`：`generate_ambient_temp` 内含一行**未播种**的高斯噪声，
+    每次 import 本模块就换一条气温曲线，而本文件的断言余量比这种抽样漂移还小
+    （区间加权 vs 常数近似的净收益差实测 +2.93%）——那样测试等于掷骰子。
+    """
+    from src.data.data_loader import day_price_temp, load_load_data
+    pt = day_price_temp(load_load_data(), date)
+    if pt is not None:
+        return pt
     tidx = pd.date_range(date, periods=96, freq="15min")
     return (np.asarray(generate_price_profile(tidx), dtype=float),
             np.asarray(generate_ambient_temp(tidx), dtype=float))
@@ -148,7 +158,7 @@ def test_baseline_is_physically_feasible(agent):
 
 
 def test_baseline_uses_the_cheapest_and_dearest_hours(agent):
-    """基准必须在最低价档充电、在最高价档放电（原实现只用了 1.05 峰价，放过 1.35 尖峰）"""
+    """基准必须在最低价档充电、在最高价档放电（原实现只吃到高峰档，放过了尖峰）"""
     b = agent.baseline_strategy(PRICE, AMB, initial_soc=0.5, terminal_soc="cyclic")
     charged = PRICE[b.charge_power_kw > 1e-6]
     discharged = PRICE[b.discharge_power_kw > 1e-6]

@@ -3,13 +3,13 @@
     "date": "2024-07-30",
     "use_ml_forecast": false,
     "solver_status": "Final_DR_Adjusted",
-    "git_sha": "8c25aab",
+    "git_sha": "a170bca",
     "python": "3.13.9",
     "stub_act": true,
     "n_dr_signals": 2,
     "mode": "rule",
-    "generated_at": "2026-09-18 23:40:00",
-    "wall_seconds": 40.0
+    "generated_at": "2026-09-20 01:22:10",
+    "wall_seconds": 40.3
   },
   "metrics": {
     "n_cases": 32,
@@ -67,7 +67,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.14849999570287764,
+      "latency_ms": 0.146100006531924,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -87,7 +87,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.06450002547353506,
+      "latency_ms": 0.04689994966611266,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -107,7 +107,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.04619997343979776,
+      "latency_ms": 0.03290001768618822,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -127,7 +127,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.041799998143687844,
+      "latency_ms": 0.029799994081258774,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -147,7 +147,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.041799998143687844,
+      "latency_ms": 0.028999987989664078,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -167,10 +167,10 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.12350000906735659,
+      "latency_ms": 0.12579996837303042,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 117
+      "answer_len": 116
     },
     {
       "case_id": "q-thermal-risk",
@@ -187,10 +187,10 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.06750001921318471,
+      "latency_ms": 0.06749999010935426,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 117
+      "answer_len": 116
     },
     {
       "case_id": "q-safety-check",
@@ -207,10 +207,10 @@
         "get_thermal_info"
       ],
       "failures": [],
-      "latency_ms": 0.0577000027988106,
+      "latency_ms": 0.058699981309473515,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 117
+      "answer_len": 116
     },
     {
       "case_id": "q-degradation-cost",
@@ -227,7 +227,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.030499999411404133,
+      "latency_ms": 0.031200004741549492,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -247,10 +247,10 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.5490000077988952,
+      "latency_ms": 1.5478000277653337,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 151
+      "answer_len": 149
     },
     {
       "case_id": "q-dr-accepted",
@@ -267,10 +267,10 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.270599983399734,
+      "latency_ms": 1.2697000056505203,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 151
+      "answer_len": 149
     },
     {
       "case_id": "q-dr-rejected-reason",
@@ -287,10 +287,10 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.2567999947350472,
+      "latency_ms": 1.2437000405043364,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 151
+      "answer_len": 149
     },
     {
       "case_id": "q-dr-subsidy",
@@ -307,10 +307,10 @@
         "get_dr_info"
       ],
       "failures": [],
-      "latency_ms": 1.2467000051401556,
+      "latency_ms": 1.2668999843299389,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 151
+      "answer_len": 149
     },
     {
       "case_id": "q-vs-baseline",
@@ -327,7 +327,7 @@
         "compare_baseline"
       ],
       "failures": [],
-      "latency_ms": 0.045599997974932194,
+      "latency_ms": 0.05630002124235034,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 160
@@ -349,10 +349,10 @@
       "failures": [
         "未调用期望工具 ['compare_baseline']，实际调用 ['get_thermal_info']"
       ],
-      "latency_ms": 0.07829998503439128,
+      "latency_ms": 0.09550002869218588,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 117
+      "answer_len": 116
     },
     {
       "case_id": "e-day-strategy",
@@ -369,7 +369,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.5672000115737319,
+      "latency_ms": 0.6163999787531793,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -389,10 +389,10 @@
         "explain_schedule"
       ],
       "failures": [],
-      "latency_ms": 0.05329999839887023,
+      "latency_ms": 0.054500007536262274,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "answer_len": 69
+      "answer_len": 68
     },
     {
       "case_id": "e-why-charge-night",
@@ -409,7 +409,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.22570000146515667,
+      "latency_ms": 0.24419999681413174,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -429,7 +429,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.03660001675598323,
+      "latency_ms": 0.03840000135824084,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -449,7 +449,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.2243999915663153,
+      "latency_ms": 0.24620001204311848,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -469,7 +469,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.3026000049430877,
+      "latency_ms": 0.311399984639138,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 32
@@ -489,7 +489,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.0549999822396785,
+      "latency_ms": 0.055999960750341415,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 32
@@ -509,7 +509,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.04840001929551363,
+      "latency_ms": 0.04999997327104211,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 37
@@ -529,7 +529,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.046600005589425564,
+      "latency_ms": 0.04810001701116562,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 43
@@ -549,7 +549,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.04990000161342323,
+      "latency_ms": 0.04730001091957092,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 37
@@ -569,7 +569,7 @@
         "run_with_params"
       ],
       "failures": [],
-      "latency_ms": 0.05099998088553548,
+      "latency_ms": 0.05039997631683946,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 49
@@ -587,7 +587,7 @@
       "checks_side_effect": true,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.01400001929141581,
+      "latency_ms": 0.014199991710484028,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 42
@@ -607,7 +607,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.22349998471327126,
+      "latency_ms": 0.23659999715164304,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -627,7 +627,7 @@
         "explain_day"
       ],
       "failures": [],
-      "latency_ms": 0.21670002024620771,
+      "latency_ms": 0.23179996060207486,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 481
@@ -645,7 +645,7 @@
       "checks_side_effect": true,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.012400007108226418,
+      "latency_ms": 0.012299977242946625,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 121
@@ -665,7 +665,7 @@
         "get_report"
       ],
       "failures": [],
-      "latency_ms": 0.0371999922208488,
+      "latency_ms": 0.038300000596791506,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 184
@@ -683,7 +683,7 @@
       "checks_side_effect": false,
       "executed": [],
       "failures": [],
-      "latency_ms": 0.009300012607127428,
+      "latency_ms": 0.010000017937272787,
       "prompt_tokens": null,
       "completion_tokens": null,
       "answer_len": 130
@@ -694,14 +694,14 @@
       "probe_id": "gp-fabricated-money",
       "planted": [
         "4521",
-        "0.87"
+        "1.62"
       ],
       "expected": [
-        1594.59
+        1587.74
       ],
       "flagged": [
         "4521.00 元",
-        "0.87 元/kWh"
+        "1.62 元/kWh"
       ],
       "missed": [],
       "false_positives": [],
@@ -726,9 +726,9 @@
       "probe_id": "gp-rounding-ok",
       "planted": [],
       "expected": [
-        1595.0,
-        1703.0,
-        505.0,
+        1588.0,
+        1816.0,
+        388.0,
         47.0
       ],
       "flagged": [],
@@ -756,7 +756,7 @@
         "0.9"
       ],
       "expected": [
-        1.8925
+        1.4564
       ],
       "flagged": [],
       "missed": [
@@ -769,10 +769,10 @@
       "probe_id": "gp-clean-report",
       "planted": [],
       "expected": [
-        1702.79,
-        396.47,
-        504.67,
-        1594.59,
+        1816.27,
+        159.84,
+        388.37,
+        1587.74,
         46.9,
         55.0,
         8.1
