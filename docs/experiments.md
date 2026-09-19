@@ -42,12 +42,59 @@ pytest -o addopts= -q                     # 全量（含 slow）
 | 日净收益（套利 − 衰减） | 626.49 元 | **1198.12 元** | 1309.00 元 |
 | 日充电量 / 放电量 | 842 / 760 kWh ⁽¹⁾ | 3005.5 / 2712.4 kWh | 3368.8 / 3040.3 kWh |
 | 最高电池温度 | 42.3 ℃ | 46.99 ℃（降额区） | 57.12 ℃（已越过 55 ℃ 停机阈值） |
-| 求解时间 | < 0.1 s | 38 ~ 43 s（HiGHS, MIP gap = 0%） | 24.1 s |
+| 求解时间 | < 0.1 s | 40 ~ 43 s（HiGHS，`mip_gap` 代码默认 **1%**） | 24.1 s |
 
 > ⁽¹⁾ **未复核项**：基准策略的充/放电量沿用 2026-09-07 记录，本次未单独复核。
 > 该列其余 5 项已逐项复核一致。
 
 口径说明：本表「日净收益」列统一为**套利 − 衰减**（不含 DR 补贴），与基准策略同口径。
+
+### 复现脚本（2026-09-19 实测通过）
+
+量化成果表那一列是**整轮运行**（含页面默认的两个 DR 事件）产出的，不是单次 MILP——
+直接调 `optimize()` 得到的是基础调度（套利 1702.79 / 衰减 483.04 / 净收益 1219.75），
+对不上表里的 504.67。复现必须走协调器：
+
+```python
+from src.utils.config import CONFIG
+from src.agents.coordinator_agent import CoordinatorAgent, DRSignal
+from src.data.data_loader import load_load_data
+
+D = "2024-07-30"
+DR = [DRSignal(start_time=f"{D} 15:00", end_time=f"{D} 17:00", target_reduction_kw=400.0,
+               subsidy_per_kwh=0.8, dr_type="peak_shaving"),
+      DRSignal(start_time=f"{D} 19:30", end_time=f"{D} 20:30", target_reduction_kw=500.0,
+               subsidy_per_kwh=1.0, dr_type="peak_shaving")]
+rep = CoordinatorAgent(CONFIG).run_daily_scheduling(
+    date=D, historical_data=load_load_data(), dr_signals=DR,
+    use_ml_forecast=True, include_thermal=True, include_degradation=True)
+
+# 判据写成断言，免得把"口径差"当成"复现成功"：
+assert abs(rep.arbitrage_revenue_yuan - 1702.79) < 0.5, rep.arbitrage_revenue_yuan
+assert abs(rep.degradation_cost_yuan - 504.67) < 0.5, rep.degradation_cost_yuan
+assert abs(rep.max_battery_temp_c - 46.99) < 0.2, rep.max_battery_temp_c
+assert abs(rep.equivalent_cycles - 1.8925) < 0.01, rep.equivalent_cycles
+print(rep.net_revenue_yuan)   # 1731.89 = 表内 1198.12 + DR 补贴 533.77
+```
+
+本轮实测（2026-09-19，开发机 Python 3.13.9，整轮 42.7 s）：
+
+- **量化成果表逐项复现一致**（含上表 `MILP 优化（稳态）` 那一列的四个数字）。
+  表内「日净收益」不含 DR 补贴，所以 1731.89 与 1198.12 是同一个解的两种口径。
+- **表内"求解时间"那行原标注 `MIP gap = 0%` 有误**，已改为代码默认的 1%。
+  同一输入把 gap 收到 0% 需 100.6 s，且解出另一个更优的**基础调度**：
+  净收益 1219.75 → 1254.59（+2.9%）。要点是 **gap 容差的代价可以大于容差本身**——
+  目标函数按 `degradation_in_objective_yuan` 计费，报表按后验区间加权重算，
+  两套口径不同源时 1% 的容差会放大成 2.9% 的结果差。
+- **SOC 区间加权 vs 常数近似**（`soc_weighted_degradation` 开关，两者净收益均由同一套
+  后验区间加权成本结算，可比）：区间加权 **1219.75** vs 常数近似 **1218.08**，
+  差 **+1.67 元（0.14%）**，低于 2% 实质增幅门槛、也在 1% gap 噪声内。
+  差值这么小是两笔账互相抵消：常数系数把那组功率曲线的衰减成本计成 556.45 元
+  （真实值 391.49 元，**高估 42%**），于是优化器少赚 93.22 元套利、同时少耗 91.55 元
+  真实衰减。等效循环 1.8114 vs 1.4681。方向由
+  `tests/test_storage_agent.py::test_soc_weighted_degradation_improves_decisions`（`slow`）守着。
+  > 此前 README 写的是"精确模型 1245.30 vs 常数近似 1224.08"，两个数都属 2026-09-07
+  > 那批已被更正的口径（CHANGELOG 记着 1245.30 → 1198.12），已按本次实测替换。
 
 ### 关键发现
 
@@ -93,7 +140,7 @@ Web 端「开始求解」走完整 LangGraph 链路，实测端到端 **26.5 秒
 - 解释层：无 API Key → `source=rule`，规则模板正常输出，主流程不受影响。
 
 > 说明：调度日 2024-07-15 是系统**默认调度日**（`default_date()` 取可用日期列表的中间日），
-> 与上文 2024-07-30 不同日，故收益数值不可直接横向比较。求解耗时随当日规模浮动（本机区间 **26 ~ 43 秒**）。
+> 与上文 2024-07-30 不同日，故收益数值不可直接横向比较。求解耗时随当日规模浮动（本机区间 **26 ~ 51 秒**）。
 
 ---
 
@@ -160,7 +207,7 @@ Web 端「开始求解」走完整 LangGraph 链路，实测端到端 **26.5 秒
 | 数字保真 | 1.000 | 1.000（9 例带锚点） | 一致 |
 | 副作用守卫 | 1.000 | 1.000（5 例） | 一致 |
 | 编造捕获 / 误报 | 0.750 / 0.000 | 0.750 / 0.000 | 一致——守卫是同一套 `check_grounding`，与被路由的是谁无关 |
-| 延迟 p50 / p95 | 0 / 0 ms | 5 073 / 28 831 ms | token 132 533 prompt + 32 257 completion |
+| 延迟 p50 / p95 | 0.1 / 1.3 ms | 5 073 / 28 831 ms | token 132 533 prompt + 32 257 completion |
 
 三条失败的逐条归因写在 [`evals/README.md`](../evals/README.md) 的已知失败用例表里：两条是判分口径
 （`must_contain` 用了规则模板的 `✅`/`❌` 表面符号，模型回答的事实部分完整且正确），一条是
@@ -193,6 +240,7 @@ Web 端「开始求解」走完整 LangGraph 链路，实测端到端 **26.5 秒
 | 基准策略充/放电量 842 / 760 kWh | 本文件 §1 表 | 2026-09-07 |
 | XGBoost 去温度特征 MAPE 2.98% | 本文件 §2 表 | 2026-09-07 |
 | ablation MAPE 2.99% | 本文件 §2 表 | 2026-09-07 |
+| 跨分辨率三元组的 24 点值 1285.79 元 | 主 README「约束参数寻优」护栏 2 | ⚠️ **未复核且自相矛盾**：同一份样本记录里默认配置在 24 点是 1260.58 元（`docs/parameter-search-sample.md` 候选轨迹第 1 行），两者差 25.21 元（2.0%），不可能同时是“默认约束 + 24 点”。它正好落在护栏 4 的 2% 胜出门槛上，所以这一项要么重跑对齐，要么把门槛论证改成只引用抖动三元组 |
 | 解释层真实模型回归 | 本文件 §3.1 | **已于 2026-09-19 执行**（`deepseek-flash`，单轮）——但只测过一轮，指标随模型与采样浮动，换模型须重跑 |
 
 其余数字均在本文档标注的环境下复核过。若发现不一致，以重新实测为准——实测优先于本文档记录。
