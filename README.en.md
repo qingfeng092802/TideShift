@@ -24,6 +24,10 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 - **Reproducible**: **232 tests** (200 fast + 32 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
 > Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, slightly behind the naive baseline's 3.01%**; DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
 
+![End-to-end demo: solve progress → overview → battery thermal → chat explanation](docs/screenshots/tideshift-demo.gif)
+
+> The clip above is a **real recording**, not a mockup: headless Chromium drives the local service through the whole chain on the bundled demo data, dispatch day 2024-07-15. **No LLM key is configured**, so the answer on the right comes from the rule template — and it labels its own source. 19.8 s / 0.43 MB / loops forever. Static shots: [Screenshots](#screenshots).
+
 > **Project positioning**: a **reference implementation / demo system** for discussion and teaching, not a dispatch product you can deploy. The revenue figures rest on simplifying assumptions (see [Known limitations and roadmap](#known-limitations-and-roadmap)) and are **not** a basis for dispatch decisions, financial settlement, or capacity planning.
 
 > ### ⚠️ Read this before exposing it to the public internet
@@ -546,6 +550,7 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | **Dashboard has no dispatch data, returns 409** | Nothing solved yet — click "开始求解" ("Start solving") once |
 | **Port 8800 in use** | Change `ENERGY_PORT`, or run `restart_backend.bat` (it frees the port first) |
 | **Solve much slower (minutes)** | Usually `highspy` missing: `pulp.HiGHS` raises and it silently falls back to CBC (about 4~5× slower). Check `pip show highspy` |
+| **Page says "echarts is not defined", all charts blank** | The local working copy of `web/vendor/echarts.min.js` carries CRLF while the `<script>` tag has an SRI `integrity` attribute — 40 extra bytes and the hash no longer matches, so the browser refuses to run it. Only hits old working trees checked out before `.gitattributes` existed (a fresh clone is fine). Fix: `git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js` (same for `web/css/app.css` and `web/js/markdown.js`, which have no SRI so they merely look odd) |
 | **Explanation keeps showing "rule template"** | No LLM key, or the key is invalid / the network unreachable — designed degradation, main flow unaffected |
 | **Forecast accuracy poor after uploading data** | Under 11 days of history it degrades to naive baseline with no physical correction, plus a degradation alert on the dashboard. Threshold from `required_history_days()`: 7 days of lag + 3 days of test split + 1 day training floor |
 | **Are DR events read from `data/load/dr_signals.csv`?** | **No.** The web flow generates two default DR events for the selected dispatch day (15:00–17:00 / 19:30–20:30), plus in-page manual triggering and `POST /api/dr/trigger`. `dr_signals.csv` is offline sample data whose loader `load_dr_signals()` is referenced only by tests, not by the web chain — editing that CSV will not change the DR events in the UI |

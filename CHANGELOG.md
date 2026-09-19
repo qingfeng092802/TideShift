@@ -31,6 +31,26 @@
 - 遗留：`backend/server.py` 仍有 **1717 行**（含 29 个端点与会话管理）。已按注释清理降低可读性
   负担，但**尚未按"认证 / 求解 / 页面数据 / 设置"拆分模块**，这是下一步。
 
+### 新增（Added）—— 2026-09-19 首屏演示动图
+
+- **`docs/screenshots/tideshift-demo.gif`**（1000×625、38 帧、19.8 秒、0.43 MB）：headless Chromium
+  通过 CDP 驱动本机真实服务，走完「登录 → 欢迎页 → 强制重算（进度遮罩真跑 MILP）→ 数据总览 →
+  电池热管理 96 点温度曲线 → 对话问一句」。没有假界面、没有后期合成；
+  **未配置 LLM Key，所以右侧对话是规则模板解释，界面自己也标注了来源**——这一点写进了图注。
+- 中英 README 首屏各插入该动图，图注说明录制方式、调度日与"没接 LLM"这一事实。
+
+### 修复（Fixed）—— 录制过程中撞出来的本地环境坑
+
+- **`web/vendor/echarts.min.js` 在本地工作树里带 45 个 CRLF，撞上 `<script>` 上的 SRI
+  `integrity` 校验，浏览器直接拒绝执行 → 整个看板报「echarts is not defined」、图表全空白**。
+  仓库里的 blob 和 `index.html` 里那串 sha384 **都是对的**（实测：blob 归一化后哈希逐字符相等），
+  坏的是这台机器上"在 `.gitattributes` 之前检出"的工作树——git 比对时会做行尾归一化，
+  所以 `git status` 显示干净，看不出任何异常；SRI 却按字节算，40 字节的差异就是致命差异。
+  新克隆不受影响。**修复方式**：`git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js`
+  （`web/css/app.css` 1159 处、`web/js/markdown.js` 129 处同理，它们没有 SRI 所以只是不美观）。
+  已作为常见问题写进两份 README 的 FAQ——这个坑值得被单独说一次：**行尾差异在"有 SRI 的静态资源"上
+  会从 cosmetic 升级成 hard failure**。
+
 ### 新增（Added）—— 2026-09-18 agent 行为评测层
 
 - **`evals/` 评测层**：与 `tests/` 分开计量。`tests/` 答"代码按设计跑了吗"，
