@@ -88,8 +88,8 @@ def number_in_text(value: float, text: str, tol: float = 1.0,
                    rel_tol: float = 0.0) -> bool:
     """回答里是否出现了给定数值。
 
-    抽数比较而不是 `str(value) in text`：模型会把 1198.12 写成 1198、1,198.12
-    或 约 1198 元，字符串包含会把正确答案判错。
+    抽数比较而不是 `str(value) in text`：模型会把 1427.90 写成 1427、1,427.90
+    或 约 1427 元，字符串包含会把正确答案判错。
     """
     nums = [float(x.replace(",", "")) for x in re.findall(r"\d[\d,]*(?:\.\d+)?", text or "")]
     limit = abs(value) * rel_tol + tol

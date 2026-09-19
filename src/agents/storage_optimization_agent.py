@@ -77,7 +77,6 @@ class StorageOptimizationAgent:
     def optimize(
         self,
         price_profile: np.ndarray,
-        load_profile: Optional[np.ndarray] = None,
         ambient_temp_profile: Optional[np.ndarray] = None,
         initial_soc: float = 0.5,
         include_thermal_constraint: bool = True,
@@ -93,7 +92,10 @@ class StorageOptimizationAgent:
 
         参数：
             price_profile: 96点电价曲线 元/kWh
-            load_profile: 96点负荷曲线 kW（预留，当前模型为价格驱动）
+            （本模型刻意**不接受负荷参数**：调度是价格驱动的，负荷只通过需求响应目标
+              与预测链路进入。以前这里挂过一个从未被读取的 `load_profile`，于是所有
+              `optimize(PRICE, AMB)` 形式的调用都把气温曲线绑到了它上面——气温被静默丢弃、
+              退化成常量 30 ℃，热约束随之放松。现在第 2 个位置参数就是气温。）
             ambient_temp_profile: 96点环境温度曲线 ℃
             initial_soc: 初始SOC
             include_thermal_constraint: 是否包含热约束
@@ -484,8 +486,8 @@ class StorageOptimizationAgent:
         基准策略：谷段充满、尖峰放完（运维现场最常见的手动策略）
 
         两条容易做错的地方：
-        - 用"电价 75 分位"选放电时段是个稻草人 —— 它只吃到 1.05 的峰价，把 1.35
-          的尖峰档整个放过；这里显式取最低档充、最高档放。
+        - 用"电价 75 分位"选放电时段是个稻草人 —— 它只吃到高峰档价，把尖峰档
+          整个放过；这里显式取最低档充、最高档放。
         - 充放电量先算多 10%~15% 再用 np.clip 截断，能量账不平；改为逐步计算可用
           余量，SOC 天然不越界。
         - 与优化策略同口径（含终值 SOC 约束），否则比较的是两套假设。

@@ -1,7 +1,8 @@
 """
 全局配置参数
 工商业储能系统：1MW/2MWh 磷酸铁锂
-电价参考：广东省工商业峰谷分时电价（2024年典型水平）
+电价口径：粤发改价格〔2021〕331 号（时段划分见 src/data/data_generator.py::PRICE_PERIODS，
+逐条对应与限制见 data/README.md）
 """
 import threading
 from dataclasses import dataclass, field, replace
@@ -68,15 +69,21 @@ class BatteryConfig:
 
 @dataclass(frozen=True)
 class PriceConfig:
-    """电价配置（广东省工商业峰谷分时电价，元/kWh）"""
-    # 尖峰电价（10-12月、1-2月的11:00-12:00, 15:00-17:00, 19:00-21:00）
-    spike_price: float = 1.35
-    # 高峰电价（8:00-11:00, 13:00-15:00, 17:00-19:00, 21:00-23:00）
-    peak_price: float = 1.05
-    # 平段电价（7:00-8:00, 12:00-13:00, 23:00-24:00）
-    flat_price: float = 0.65
-    # 低谷电价（0:00-7:00）
-    valley_price: float = 0.32
+    """电价配置（广东省工商业峰谷分时电价，元/kWh）。
+
+    **这四个数不是手填的**：按粤发改价格〔2021〕331 号规定的
+    `峰 : 平 : 谷 = 1.7 : 1 : 0.38` 与"尖峰在高峰基础上上浮 25%"，
+    由平段基准价 0.65 元/kWh 推导——换城市或换电压等级时只改平段基准，
+    其余三个数按同一比例重算，比例关系就不会被手改破坏。
+    尖峰 1.38125 刻意不取整：取整后 尖峰/高峰 就不再严格等于 1.25。
+
+    时段划分（含"尖峰仅 7/8/9 月的 11-12、15-17 时"）不在此处，
+    唯一实现是 `src/data/data_generator.py::PRICE_PERIODS`；出处与换算见 `data/README.md`。
+    """
+    spike_price: float = 1.38125    # = 高峰 × 1.25 = 0.65 × 1.7 × 1.25
+    peak_price: float = 1.105       # = 平段 × 1.7
+    flat_price: float = 0.65        # 平段基准（示例值，非某户实际到户价）
+    valley_price: float = 0.247     # = 平段 × 0.38
 
     # 需求响应补贴
     dr_subsidy_per_kwh: float = 0.8       # 削峰补贴 元/kWh

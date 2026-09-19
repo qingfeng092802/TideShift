@@ -674,9 +674,9 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 12px 14px; transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
 .price-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-1); }
-.price-card .top { display: flex; justify-content: space-between; align-items: center; }
+.price-card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .price-card .tag2 { font-size: 12px; font-weight: 700; }
-.price-card .rng { font-size: 10.5px; color: var(--text-3); }
+.price-card .rng { font-size: 10.5px; color: var(--text-3); line-height: 1.5; }
 .price-card .pv { font-size: 19px; font-weight: 700; margin-top: 4px; font-family: var(--font-num); }
 .price-card .pv small { font-size: 10px; color: var(--text-3); font-weight: 400; }
 

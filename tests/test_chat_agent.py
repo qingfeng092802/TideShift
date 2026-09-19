@@ -37,10 +37,16 @@ def tools():
     # 基准：同一天的 baseline_strategy 结果（让对比工具返回有内容）
     from src.agents.storage_optimization_agent import StorageOptimizationAgent
     import pandas as _pd, numpy as _np
+    from src.data.data_loader import day_price_temp
     from src.data.data_generator import generate_price_profile, generate_ambient_temp
-    _tidx = _pd.date_range(DATE, periods=96, freq="15min")
-    _price = _np.asarray(generate_price_profile(_tidx), dtype=float)
-    _amb = _np.asarray(generate_ambient_temp(_tidx), dtype=float)
+    # 取当日落盘序列而不是现场 generate：generate_ambient_temp 含未播种噪声，
+    # 每次抽一条新气温曲线，baseline 的对比项就跟着漂。
+    _pt = day_price_temp(df, DATE)
+    if _pt is None:
+        _tidx = _pd.date_range(DATE, periods=96, freq="15min")
+        _pt = (_np.asarray(generate_price_profile(_tidx), dtype=float),
+               _np.asarray(generate_ambient_temp(_tidx), dtype=float))
+    _price, _amb = _pt
     baseline = StorageOptimizationAgent(CONFIG).baseline_strategy(_price, _amb)
     viz_data = coord.get_visualization_data() if hasattr(coord, "get_visualization_data") else None
     ctx = AgentContext(report=report, coordinator=coord, baseline=baseline,

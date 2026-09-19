@@ -131,22 +131,43 @@ const App = {
     });
     $("#btn-upload-close").addEventListener("click", () => dlg.close());
     /* 标准格式模板下载：前端生成 CSV（96 点 · 15 分钟粒度），带 UTF-8 BOM 防 Excel 乱码。
-       字段与后端识别的「标准格式」一致：timestamp, load_kw, price, temp；无需后端接口。 */
+       字段与后端识别的「标准格式」一致：timestamp, load_kw, price, temp；无需后端接口。
+       电价一律按 /api/bootstrap 下发的 price_periods 计算——这里曾内联过一套
+       17-22 点尖峰的私有日历，用户下载模板、只改负荷再传回来，算钱用的档位跟引擎对不上。 */
     $("#btn-upload-template").addEventListener("click", () => {
       const pad = (n) => String(n).padStart(2, "0");
       const rows = [["timestamp", "load_kw", "price", "temp"]];
-      const base = new Date(2024, 0, 1, 0, 0, 0);
+      // 2024-07：与内置数据集同月，模板样例能同时展示尖/峰/平/谷四档
+      const base = new Date(2024, 6, 1, 0, 0, 0);
+      const periods = ((State.boot && State.boot.engine_config || {}).price_periods) || [];
+      if (!periods.length) { toast("引擎参数尚未加载，请稍后重试", "err"); return; }
+      const priceAt = (h, month) => {
+        // 最窄窗口胜：尖峰窗口是高峰窗口的子集，靠遍历顺序判档会静默换档
+        let best = null;
+        for (const per of periods) {
+          if (per.months && !per.months.includes(month)) continue;
+          for (const [lo, hi] of per.range) {
+            if (lo <= h && h < hi) {
+              if (best === null || hi - lo < best.span) best = {price: per.price, span: hi - lo};
+              break;
+            }
+          }
+        }
+        return best;
+      };
       for (let i = 0; i < 96; i++) {
         const d = new Date(base.getTime() + i * 15 * 60000);
-        const h = d.getHours();
+        const h = d.getHours() + d.getMinutes() / 60;
         const shape = Math.pow(Math.sin(((h - 6) / 24) * Math.PI * 2), 2);
         const peak = h >= 17 && h < 22 ? 260 : 0;
         const load = Math.round(600 + 420 * shape + peak);
-        const price = h >= 17 && h < 22 ? 1.35 : (h >= 8 && h < 17 ? 0.86 : 0.32);
+        const found = priceAt(h, d.getMonth() + 1);
+        if (!found) { toast(`电价日历未覆盖 ${pad(d.getHours())}:${pad(d.getMinutes())}`, "err"); return; }
+        const price = found.price;
         const temp = (24 + 7 * Math.sin(((h - 9) / 24) * Math.PI * 2)).toFixed(1);
         rows.push([
-          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(h)}:${pad(d.getMinutes())}:00`,
-          load, price.toFixed(2), temp,
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`,
+          load, String(price), temp,
         ]);
       }
       const csv = "\uFEFF" + rows.map((r) => r.join(",")).join("\r\n");

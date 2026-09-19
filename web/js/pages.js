@@ -190,7 +190,7 @@ function renderScheduling(root, d) {
       ${d.price_cards.map((c) => `
       <div class="price-card">
         <div class="top"><span class="tag2" style="color:${TONE[c.tone]};">${c.tag}</span><span class="rng">${c.range}</span></div>
-        <div class="pv">${c.price.toFixed(2)}<small> 元/kWh</small></div>
+        <div class="pv">${c.price}<small> 元/kWh</small></div>
       </div>`).join("")}
     </div>
     <div class="caption">💡 充电集中在低谷/平段，放电集中在尖峰/高峰，价差即为套利空间</div>
@@ -830,14 +830,15 @@ async function _renderSettings(root) {
       <div class="panel-card">
         <div class="panel-title">💰 电价配置</div>
         <div class="grid grid-2" style="gap:10px;">
-          <div class="field"><label>尖峰 (元/kWh)</label><input type="number" id="price-peak" step="0.01" value="${p.price_peak}"></div>
-          <div class="field"><label>高峰 (元/kWh)</label><input type="number" id="price-high" step="0.01" value="${p.price_high}"></div>
-          <div class="field"><label>平段 (元/kWh)</label><input type="number" id="price-flat" step="0.01" value="${p.price_flat}"></div>
-          <div class="field"><label>低谷 (元/kWh)</label><input type="number" id="price-valley" step="0.01" value="${p.price_valley}"></div>
+          <div class="field"><label>尖峰 (元/kWh)</label><input type="number" id="price-peak" min="0" step="0.00001" value="${p.price_peak}"></div>
+          <div class="field"><label>高峰 (元/kWh)</label><input type="number" id="price-high" min="0" step="0.00001" value="${p.price_high}"></div>
+          <div class="field"><label>平段 (元/kWh)</label><input type="number" id="price-flat" min="0" step="0.00001" value="${p.price_flat}"></div>
+          <div class="field"><label>低谷 (元/kWh)</label><input type="number" id="price-valley" min="0" step="0.00001" value="${p.price_valley}"></div>
         </div>
         <div style="margin-top:10px;">
           ${(engineCfg().price_periods || []).map((pp) => `<div class="metric-row"><span class="metric-label"><span class="status-tag ${pp.cls}">${pp.name}</span></span><span class="metric-value">${pp.hours}</span></div>`).join("")}
         </div>
+        <div class="caption" style="margin-top:8px;">💡 时段划分与生效月份来自粤发改价格〔2021〕331 号，由引擎下发（<code>PRICE_PERIODS</code>）；这里只改价格数值。</div>
       </div>
       <div class="panel-card">
         <div class="panel-title">⚙️ 优化选项</div>

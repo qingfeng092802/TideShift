@@ -19,7 +19,8 @@
    但峰值温度会越过 55 ℃ 停机线。这类候选可以被**评价**、不可以被**选中**，
    除非调用方显式 `allow_unsafe_winner=True` 并知情。
 2. **同分辨率比较**：24 / 48 / 96 点是三个**不同的优化问题**，净收益不可跨分辨率比
-   （同一配置实测 1285.79 / 1279.09 / 1226.94 元）。搜索阶段用粗分辨率省钱，
+   （2024-07-30 同一配置实测 1366.90 / 1380.85 / 1373.58 元，2026-09-20 口径）。
+   搜索阶段用粗分辨率省钱，
    胜出者必须回到 96 点、与默认配置**同场同路**复验后才能写进结论。
 3. **允许 agent 输**：复验没跑赢默认配置，报告就写"未跑赢"并采用默认。
    与本项目负荷预测模块"朴素基线优先"同一口径。
@@ -72,10 +73,13 @@ KNOBS: Dict[str, Dict[str, Any]] = {
 POLICY_KNOBS: Tuple[str, ...] = ("include_thermal", "enable_dr")
 MIN_SOC_GAP_PCT = 10          # 上下限至少留 10%，否则可用容量近乎归零
 ENERGY_BALANCE_TOL_KWH = 1.0  # 后验能量守恒残差容差
-# 求解器在 mip_gap=1% 下允许提前停在可行解，同一配置连跑两次实测能差出 ~1%
-# （24 点默认约束三次实测：1244.24 / 1255.87 / 1260.58 元，与
-#  docs/parameter-search-sample.md 候选轨迹第 1 行的默认配置 1260.58 同源）。
-#  所以"更小即更优"的比较必须有实质增幅，否则寻优会去追求解器抖动。取 2% > mip_gap，留一倍余量。
+# 胜出门槛必须大于 mip_gap：搜索与复验都跑在 gap 1% 上，容差以内的"提升"没有意义。
+# 这里曾写过"同一配置连跑三次实测 1244.24 / 1255.87 / 1260.58 元，是求解器抖动"——
+# **那个归因是错的**（2026-09-20 实测证伪）：差的不是解，是输入。寻优路径原先自己
+# 调 generate_ambient_temp 抽气温曲线，而它内含一行未播种的高斯噪声，于是每新建一个
+# search agent 就换一天天气，24 点默认约束连跑四次落在 1352.18 ~ 1392.01 元（极差 2.9%，
+# **比这个门槛还大**）。改为读当日落盘序列后，同输入重复求解逐分不差。
+# 输入既已确定，2% 就只承担一件事：盖住 1% 的容差，留一倍余量。
 MATERIAL_GAIN_RATIO = 0.02
 
 
@@ -429,9 +433,9 @@ def _common_notes() -> List[str]:
     return [
         "搜索阶段净收益不含需求响应补贴（storage-only 口径），复验阶段走完整生产链路"
         "含 DR；两个数不可互相比较。",
-        f"胜出门槛：净收益增幅须 > {MATERIAL_GAIN_RATIO:.0%}。mip_gap=1% 下同配置重复"
-        f"求解实测可抖动约 1%（24 点默认约束三次跑出 1244.24 / 1255.87 / 1260.58 元），"
-        f"小于门槛的差异是求解器噪声，不认作战果。",
+        f"胜出门槛：净收益增幅须 > {MATERIAL_GAIN_RATIO:.0%}。搜索与复验都跑在 "
+        f"mip_gap=1% 上，容差以内的差值不认作战果；门槛取容差的两倍留余量。"
+        f"输入序列固定取自当日落盘数据，同配置重复求解实测逐分不差。",
     ]
 
 
@@ -477,17 +481,21 @@ class ParameterSearchAgent:
         if cached is not None and cached.get("date") == date:
             return cached
         import src.data.data_generator as dg
-        day = pd.date_range(date, periods=96, freq="15min")
-        price = np.asarray(dg.generate_price_profile(day), dtype=float)
-        amb = np.asarray(dg.generate_ambient_temp(day), dtype=float)
-        rows = historical_data[
-            historical_data["timestamp"].dt.date == pd.to_datetime(date).date()]
-        load = (np.asarray(rows["load_kw"].values, dtype=float) if len(rows) == 96
-                else np.asarray(dg.generate_load_profile(day), dtype=float))
+        from src.data.data_loader import day_price_temp
+        # 输入一律取当日落盘序列，不再现场 generate：`generate_ambient_temp` 内含
+        # 未播种的 `np.random.normal(0, 0.8, 96)`，每次新建 search agent 就换一条气温曲线。
+        # 此前写在这里的注释把这种漂移记成了"mip_gap=1% 的求解器抖动"，实测证伪：
+        # 24 点默认约束连跑四次 1352.18 ~ 1392.01 元（极差 2.9%，大于 2% 的胜出门槛），
+        # 而同一组输入重复求解逐分不差。详见 data_loader.day_price_temp 的说明。
+        # 负荷不在这里取：MILP 是价格驱动的，`optimize()` 已不再接受 load_profile。
+        pt = day_price_temp(historical_data, date)
+        if pt is None:
+            tidx = pd.date_range(date, periods=CONFIG.battery.num_steps, freq="15min")
+            pt = (np.asarray(dg.generate_price_profile(tidx), dtype=float),
+                  np.asarray(dg.generate_ambient_temp(tidx), dtype=float))
         out = {"date": date,
-               "price": _resample(price, num_points),
-               "ambient": _resample(amb, num_points),
-               "load": _resample(load, num_points)}
+               "price": _resample(pt[0], num_points),
+               "ambient": _resample(pt[1], num_points)}
         self._day_cache[num_points] = out
         return out
 
@@ -511,7 +519,7 @@ class ParameterSearchAgent:
         # 热约束恒为真：它是安全策略项，不参与寻优（见 POLICY_KNOBS）
         started = time.perf_counter()
         sched = StorageOptimizationAgent(cfg).optimize(
-            price_profile=series["price"], load_profile=series["load"],
+            price_profile=series["price"],
             ambient_temp_profile=series["ambient"],
             include_thermal_constraint=True,
             include_degradation_cost=True)
@@ -784,7 +792,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     md = report.to_markdown()
     print(md)
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
+        # newline=chr(10)：Windows 上默认写 CRLF，而 .gitattributes 已把 *.eol=lf 钉成 LF，
+        # 重新生成一次样本就会造成整文件行尾抖动。
+        with open(args.out, "w", encoding="utf-8", newline=chr(10)) as fh:
             fh.write(md)
         print(f"已保存：{args.out}")
     return 0

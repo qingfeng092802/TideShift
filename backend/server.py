@@ -75,7 +75,8 @@ class AppState:
             "soc_min": 20, "soc_max": 90, "rated_power": 1000,
             "include_thermal": True, "include_degradation": True,
             "use_ml_forecast": True, "enable_dr": True, "orchestrator": "LangGraph",
-            "price_peak": 1.35, "price_high": 1.05, "price_flat": 0.65, "price_valley": 0.32,
+            "price_peak": CONFIG.price.spike_price, "price_high": CONFIG.price.peak_price,
+            "price_flat": CONFIG.price.flat_price, "price_valley": CONFIG.price.valley_price,
             "xgb_max_depth": 6, "xgb_lr": 0.1, "xgb_n_est": 200,
             "xgb_temp_corr": True, "xgb_floor": True, "xgb_recursive": True,
         }
@@ -250,17 +251,10 @@ STAGE_MAP = {
 }
 
 # ================= 数据上传适配（= 原 adapt_uploaded_data） =================
-def _default_price_by_hour(h):
-    """默认分时电价（元/kWh）——委托 src.data.upload_adapter 单一事实来源。
-
-    此前本函数自行硬编码时段划分，与 PRICE_PERIODS（前端时段图例所用）
-    不一致：24 小时中 11 小时档位不同、日均价差 23%；且该曲线含 6 小时连续同价
-    区间使 MILP 最优解大量退化（实测 7.2s → 120s 撞满时限）。时段口径的唯一实现是
-    `src/data/upload_adapter.py::PRICE_PERIODS`。
-    """
-    return _upload_adapter.default_price_by_hour(h)
-
-
+# 默认分时电价曾在这里又实现一遍，与 PRICE_PERIODS 分叉：24 小时中 11 小时档位不同、
+# 日均价差 23%，且该曲线含 6 小时连续同价区间使 MILP 最优解大量退化
+# （实测 7.2s → 120s 撞满时限）。重复实现已删除，唯一入口是
+# `src/data/upload_adapter.py::default_price_by_hour`。
 def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
     """把上传文件适配为内部标准格式（实现见 src/data/upload_adapter.py，双前端共用）。
 
@@ -287,8 +281,11 @@ def _data_fingerprint(_df: pd.DataFrame) -> str:
 
 
 # 电价时段划分规则版本：调整时段口径时必须 +1，否则旧缓存会带着新价格被命中。
-# 划分规则本身只在 upload_adapter.PRICE_PERIODS 定义一处。
-PRICE_RULE_VERSION = 2
+# 划分规则本身只在 src/data/data_generator.py::PRICE_PERIODS 定义一处。
+# v3：按粤发改价格〔2021〕331 号重定时段（低谷 0-8、高峰 10-12/14-19、
+#     尖峰 11-12/15-17 且仅 7/8/9 月生效）并加入月份维度。不 +1 的话，
+#     磁盘上 v2 的求解缓存会顶着旧日历的价格被命中——症状是"改了代码数字没变"。
+PRICE_RULE_VERSION = 3
 
 
 def current_cache_key() -> str:
@@ -301,7 +298,7 @@ def current_cache_key() -> str:
                    getattr(s, "subsidy_per_kwh", 0), getattr(s, "dr_type", "")))
     raw = "|".join([
         str(_sess().selected_date),
-        # 电价时段划分规则版本：口径变化必须让旧缓存失效（规则定义见 upload_adapter.PRICE_PERIODS）
+        # 电价时段划分规则版本：口径变化必须让旧缓存失效（规则定义见 data_generator.PRICE_PERIODS）
         f"pv{PRICE_RULE_VERSION}",
         str(p["orchestrator"]),
         f"{p['soc_min']}", f"{p['soc_max']}", f"{p['rated_power']}",
@@ -382,7 +379,11 @@ def _do_solve(cache_key: str):
         rated_power_kw=p["rated_power"]))
 
     price_custom = {"peak": p["price_peak"], "high": p["price_high"], "flat": p["price_flat"], "valley": p["price_valley"]}
-    price_defaults = {"peak": 1.35, "high": 1.05, "flat": 0.65, "valley": 0.32}
+    # 默认值从 CONFIG.price 取，不再抄一份字面量：抄的这份会跟着前端设置页走，
+    # 而电价口径一改（如 331 号文重推四个价）就会静默判定"用户自定义了电价"，
+    # 让每次求解都走一遍"替换价格"分支并覆盖内置数据的价格列。
+    price_defaults = {"peak": CONFIG.price.spike_price, "high": CONFIG.price.peak_price,
+                      "flat": CONFIG.price.flat_price, "valley": CONFIG.price.valley_price}
     if any(abs(price_custom[k] - price_defaults[k]) > 1e-6 for k in price_defaults):
         # 时段划分仍走 PRICE_PERIODS（SSOT），只替换价格值——此前这里又内联了一份
         #    时段划分，与内置数据使用的分段不一致。
@@ -392,8 +393,14 @@ def _do_solve(cache_key: str):
             spike_price=price_custom["peak"], peak_price=price_custom["high"],
             flat_price=price_custom["flat"], valley_price=price_custom["valley"])
         _df = _df.copy()
-        _df["price_yuan_per_kwh"] = _df["timestamp"].dt.hour.apply(
-            lambda _h: price_by_hour(_h, _custom_price_cfg))
+
+        def _custom_price(_t, _cfg=_custom_price_cfg):
+            # 传时间戳而不是小时：尖峰只在 7/8/9 月生效，只给小时判不出档位
+            _ts = pd.Timestamp(_t)
+            return price_by_hour(_ts.hour + _ts.minute / 60.0,
+                                 month=_ts.month, price_cfg=_cfg)
+
+        _df["price_yuan_per_kwh"] = _df["timestamp"].apply(_custom_price)
 
     dr_list = []
     if p["enable_dr"]:
@@ -406,7 +413,9 @@ def _do_solve(cache_key: str):
         if d[0] == "default":
             dr_signals.append(DRSignal(start_time=f"{_date} 15:00", end_time=f"{_date} 17:00",
                                        target_reduction_kw=400.0, subsidy_per_kwh=0.8, dr_type="peak_shaving"))
-            dr_signals.append(DRSignal(start_time=f"{_date} 19:30", end_time=f"{_date} 20:30",
+            # 第二个事件曾在 19:30-20:30：那是按旧日历的"尖峰 19-21"选的。
+            # 331 号文下 19 点后是平段，削峰事件落在平段语义不成立，改到 11-12（尖峰/高峰重叠）。
+            dr_signals.append(DRSignal(start_time=f"{_date} 11:00", end_time=f"{_date} 12:00",
                                        target_reduction_kw=500.0, subsidy_per_kwh=1.0, dr_type="peak_shaving"))
         else:
             dr_signals.append(DRSignal(start_time=d[0], end_time=d[1], target_reduction_kw=d[2],
@@ -736,7 +745,11 @@ def _engine_config() -> dict:
         },
         "price_periods": [
             {k: period[k] for k in ("name", "cls", "hours")}
-            | {"price": getattr(pr, period["price_field"])}
+            | {"price": getattr(pr, period["price_field"]),
+               # 窗口与生效月份一并下发：前端下载模板时要按同一张日历算价，
+               # 自己内联一份时段判断等于抄第五套口径（此前 app.js 就是如此）。
+               "range": [list(w) for w in period["range"]],
+               "months": list(period["months"]) if period.get("months") else None}
             for period in PRICE_PERIODS
         ],
     }
@@ -882,11 +895,19 @@ def page_scheduling():
     # 零除保护（全平电价时 base 套利收益为 0）
     arb_imp = ((rep.arbitrage_revenue_yuan - base.arbitrage_revenue_yuan) / base.arbitrage_revenue_yuan * 100
                if abs(base.arbitrage_revenue_yuan) > 1e-9 else 0.0)
+    # 时段说明取自 PRICE_PERIODS（单一事实来源）。此前这里又抄了一份时段文字
+    # （"高峰 08-10, 18-21" / "平段 07-08, 12-18" / "低谷 00-07, 21-24"），
+    # 与内置数据实际计价用的划分是第三、四套口径——用户在设置页看到的时段
+    # 和引擎真正按哪一档算钱，两件事对不上。
+    from src.data.data_generator import PRICE_PERIODS as _PP
+    _field_to_param = {"spike_price": "price_peak", "peak_price": "price_high",
+                       "flat_price": "price_flat", "valley_price": "price_valley"}
+    _cls_to_tone = {"st-danger": "danger", "st-warn": "warning",
+                    "st-neutral": "flat", "st-ok": "ok"}
     prices = [
-        {"tag": "尖峰", "range": "10:00-12:00", "price": p["price_peak"], "tone": "danger"},
-        {"tag": "高峰", "range": "08-10, 18-21", "price": p["price_high"], "tone": "warning"},
-        {"tag": "平段", "range": "07-08, 12-18", "price": p["price_flat"], "tone": "flat"},
-        {"tag": "低谷", "range": "00-07, 21-24", "price": p["price_valley"], "tone": "ok"},
+        {"tag": _per["name"], "range": _per["hours"], "tone": _cls_to_tone[_per["cls"]],
+         "price": p[_field_to_param[_per["price_field"]]]}
+        for _per in _PP
     ]
     return {
         "price_cards": prices,
@@ -1338,7 +1359,8 @@ def settings_reset():
     defaults = {"soc_min": 20, "soc_max": 90, "rated_power": 1000,
                 "include_thermal": True, "include_degradation": True,
                 "use_ml_forecast": True, "enable_dr": True, "orchestrator": "LangGraph",
-                "price_peak": 1.35, "price_high": 1.05, "price_flat": 0.65, "price_valley": 0.32,
+                "price_peak": CONFIG.price.spike_price, "price_high": CONFIG.price.peak_price,
+                "price_flat": CONFIG.price.flat_price, "price_valley": CONFIG.price.valley_price,
                 "xgb_max_depth": 6, "xgb_lr": 0.1, "xgb_n_est": 200,
                 "xgb_temp_corr": True, "xgb_floor": True, "xgb_recursive": True}
     with _sess().lock:

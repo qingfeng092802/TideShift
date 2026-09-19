@@ -33,9 +33,14 @@ _MONTH_BASE_TEMP = {1: 5, 2: 8, 3: 14, 4: 20, 5: 25, 6: 29,
                     7: 32, 8: 31, 9: 27, 10: 21, 11: 14, 12: 7}
 
 
-def default_price_by_hour(hour: float) -> float:
-    """默认分时电价（元/kWh）——统一委托 PRICE_PERIODS 单一事实来源。"""
-    return price_by_hour(hour)
+def default_price_by_hour(timestamp) -> float:
+    """默认分时电价（元/kWh）——统一委托 PRICE_PERIODS 单一事实来源。
+
+    参数是**时间戳**而不是小时：尖峰只在 7/8/9 月生效，只给小时就判不出档位。
+    此前这里传 `.dt.hour`，等于让上传数据的电价日历退化成"不分月份"。
+    """
+    ts = pd.Timestamp(timestamp)
+    return price_by_hour(ts.hour + ts.minute / 60.0, month=ts.month)
 
 
 def _synthesize_ambient_temp(timestamp: pd.Series) -> pd.Series:
@@ -61,7 +66,7 @@ def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
         result["timestamp"] = (pd.to_datetime(raw_df["timestamp"], utc=True)
                                .dt.tz_convert("Asia/Shanghai").dt.tz_localize(None))
         result["load_kw"] = (raw_df["consumption"] / 1000 * 4).round(1)
-        result["price_yuan_per_kwh"] = result["timestamp"].dt.hour.apply(default_price_by_hour)
+        result["price_yuan_per_kwh"] = result["timestamp"].apply(default_price_by_hour)
         result["ambient_temp_c"] = _synthesize_ambient_temp(result["timestamp"])
         return result
 
@@ -72,7 +77,7 @@ def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
         models = raw_df.get("models_used", pd.Series(1, index=raw_df.index)).replace(0, 1)
         result["load_kw"] = (raw_df["out.electricity.total.energy_consumption.kwh"]
                              / models * 4).round(1)
-        result["price_yuan_per_kwh"] = result["timestamp"].dt.hour.apply(default_price_by_hour)
+        result["price_yuan_per_kwh"] = result["timestamp"].apply(default_price_by_hour)
         result["ambient_temp_c"] = _synthesize_ambient_temp(result["timestamp"])
         return result
 
@@ -94,7 +99,7 @@ def adapt_uploaded_data(raw_df: pd.DataFrame) -> pd.DataFrame:
     result = result.dropna(subset=["timestamp"]).reset_index(drop=True)
 
     if "price_yuan_per_kwh" not in result.columns:
-        result["price_yuan_per_kwh"] = result["timestamp"].dt.hour.apply(default_price_by_hour)
+        result["price_yuan_per_kwh"] = result["timestamp"].apply(default_price_by_hour)
     if "ambient_temp_c" not in result.columns:
         result["ambient_temp_c"] = _synthesize_ambient_temp(result["timestamp"])
     return result

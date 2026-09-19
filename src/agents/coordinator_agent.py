@@ -193,7 +193,6 @@ class CoordinatorAgent:
         with trace.span("milp_optimize"):
             base_schedule = self.storage_agent.optimize(
                 price_profile=self.state.price_profile,
-                load_profile=self.state.load_profile,
                 ambient_temp_profile=self.state.ambient_temp_profile,
                 initial_soc=self.state.current_soc,
                 include_thermal_constraint=include_thermal,
