@@ -25,6 +25,7 @@
 #   快测 215 项通过 —— 本机 Python 3.13.9 / Anaconda，57 s。
 #   全量 247 项通过 —— 标准口径是 CI：GitHub Actions ubuntu-latest / Python 3.13，
 #     `pytest -m ""` 单步 846 s（Run 35446508669，workflow_dispatch @ e3df672）。
+#     注：846 s 是当时"pytest 与 coverage 各跑一遍"布局下的单步实测，重复的一遍已合并。
 #     本机同日也跑完过一轮 247 个进度点全绿，但进程在写出汇总行前被打断、没拿到计时，
 #     所以全量计时只认 CI 这个数字。
 #   计数自查：pytest -o addopts= -q --collect-only -m "" | tail -1
