@@ -183,7 +183,7 @@
 
 - **`.env.example`**：补用法说明头部。
 
-- **`LICENSE`**：MIT，版权署名 qingfeng092802 (qingfeng092802)。
+- **`LICENSE`**：MIT，版权署名 qingfeng092802。
 
 - **新增 `THIRD_PARTY_NOTICES.md` + `licenses/`**：声明随仓库分发的 Apache ECharts 5.6.0
   （Apache-2.0），以及其内嵌的 ZRender（**BSD 3-Clause**，非 Apache-2.0）与 Microsoft 代码片段
