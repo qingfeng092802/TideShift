@@ -28,7 +28,7 @@
   接上真实模型（`deepseek-flash`）后**同分母 32 例降到 0.938**，降在哪、哪两条是判分口径的锅，全写在 [`evals/`](evals/README.md)；
 - **会自己调参，也如实认输**：提案 → 真实 MILP 评价 → 同分辨率复验的闭环；这组数据上**没跑赢默认约束**，
   [报告](docs/parameter-search-sample.md)里就写"未跑赢"；
-- **可复现**：**233 项测试**（201 快测 + 32 slow）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
+- **可复现**：**238 项测试**（206 快测 + 32 slow）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
 
 > 三件不回避的事：内置 `data/` 是**合成演示数据**；负荷预测 XGBoost **3.12% MAPE 略输朴素基线的 3.01%**；
 > 需求响应按"放电量 × 补贴"结算，**尚未建模 CBL 基线**。全部列在[已知局限与路线图](#已知局限与路线图)。
@@ -411,7 +411,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `POST` | `/api/explain` | 单独生成决策解释，返回 `{text, source}`；`source` 为 `llm` / `rule` / `none` |
 | `POST` | `/api/chat` · `/api/chat/stream` · `/api/chat/clear` | 对话 Agent（含 SSE 流式），返回 `{reply, history, mode}`；`mode` 为 `rule` / `llm` |
 | `GET` | `/api/chat/history` | 对话历史 |
-| `GET` | `/api/traces` | 最近若干次运行的追溯摘要（含最慢环节），`limit` 上限 50 |
+| `GET` | `/api/traces` | 最近若干次运行的追溯摘要（含最慢环节）+ `meta`（脱敏级别 / 环形容量 / 已保留条数），`limit` 上限 50 |
 | `GET` | `/api/traces/{run_id}` | 单次运行的完整事件序列（只查内存环形，未知 id 返回 404） |
 
 ## 配置项
@@ -630,21 +630,37 @@ LLM 走了哪条路径、哪一步把数字算变了"。没有它，调试 agent
   不引 Langfuse / OTel——本项目口径是完全离线可用。
 - **接入点**：`/api/solve` 的后台求解线程、`/api/chat`、`/api/chat/stream`、`/api/explain`、
   参数寻优 Agent 的每一发求解，以及解释层的 LLM 调用（含降级原因）。
-- **接口**：`GET /api/traces?limit=20` 取摘要（含最慢环节），`GET /api/traces/{run_id}`
-  取完整事件序列。二者都在 JWT 之后；`run_id` 只作内存查询键，**不拼进文件路径**。
+- **接口**：`GET /api/traces?limit=20` 取摘要（含最慢环节）+ `meta`（当前脱敏级别、环形容量、
+  已保留条数），`GET /api/traces/{run_id}` 取完整事件序列。二者都在 JWT 之后；
+  `run_id` 只作内存查询键，**不拼进文件路径**，也不回传日志目录的绝对路径。
+- **看板页**：侧栏「运行追溯」是这一层的只读视图——最近运行列表（整轮耗时 / 环节数 / 异常数 /
+  最慢环节）+ 点一行展开单次运行的事件序列，每个环节一条占比条。页面顶部会显式解释
+  **自己为什么看不到问题原文**：级别与容量取自接口 `meta`，前端不复制一份默认值，
+  免得两边漂移后页面开始对着一套不存在的配置自我解释。
 - **默认不落业务内容**。`basic` 级只记事件名/耗时/状态与长度计数（问题文本进 trace 会变成
   `question_len`），`full` 级才记文本。对话里可能出现用户自己上传的负荷数据，
   默认不写进磁盘。
 - **两个容易出事的地方有专门测试**：活动 run 是**线程局部**的（求解跑在后台线程，
   用模块级全局会把并发请求的事件混进同一个 run，trace 就成了假证据）；
   `@trace.traced` 用 `functools.wraps` 保住签名，否则 FastAPI 注入不了请求模型。
+- **求解为什么慢，得看得见**：`forecast` 与 `milp_optimize` 两个环节进了 trace（两种编排引擎用
+  同一组环节名），否则追溯页上"调度求解 50.97 s"后面是一片空白——只有一个总数等于什么都没解释。
+  实测一次真实求解：`forecast 3.39 s` + `milp_optimize 47.47 s`。
+- **加页面当天就被自己打脸的一次口径错误**：`/api/chat/stream` 原本用 `@trace.traced` 包端点，
+  而装饰器的 `with` 只圈到"生成器对象被创建"就退出，真正的 LLM 与工具调用发生在之后被逐块消费时——
+  于是记出来是一条**亚毫秒、0 环节、属性全空**的运行，在列表里一眼就不像话。
+  现在 run 开在生成器内部；客户端提前断线抛的是 `GeneratorExit`（属于 `BaseException`，
+  不被原来的 `except Exception` 接住），若不落终态，页面会永远挂着一只显示"进行中"的僵尸运行，
+  现在记为 `aborted:GeneratorExit` 并显示"中断"。两条都有测试：
+  `test_chat_stream_run_is_traced_from_inside`、`test_abandoned_stream_gets_a_terminal_status`。
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces?limit=5"
 curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run_id>"
 ```
 
-> 已知未完成项：看板**没有追溯页**。`/api/traces` 可以直接 curl，前端页面留给后续。
+> 已知未完成项：追溯页只读**进程内环形**（默认 64 次），不提供 `logs/traces/*.jsonl` 的历史浏览
+> 与跨重启检索；页面也不自动刷新，需要切页重进。
 
 ## 量化成果
 
@@ -707,13 +723,13 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **233 项**（快测 201 项 + `slow` 32 项，其中 8 项为 `eval` 标记的 agent 行为评测），
+测试规模 **238 项**（快测 206 项 + `slow` 32 项，其中 8 项为 `eval` 标记的 agent 行为评测），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
 `eval` 那 8 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 225 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+与其余 230 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。
 
@@ -742,7 +758,7 @@ PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触�
 | `test_evals.py` | 评测层自身：四维判定的分母口径、打桩是否真的挡住了 MILP、用例文件完整性（31 项，不依赖求解器与网络） |
 | `test_evals_run.py` | 用评测层量 agent：任务成功率、数字保真、副作用守卫、与 `reports/baseline.json` 的回归比对（`eval + slow`） |
 | `test_parameter_search.py` | 寻优 Agent 的四条护栏（越温限不可选、跨分辨率不进结论、预算与时限、噪声不算战果）+ 1 项真实 MILP |
-| `test_trace.py` | trace 的线程隔离、按级脱敏、装饰器签名不变性、`/api/traces` 鉴权与 run_id 不作路径 |
+| `test_trace.py` | trace 的线程隔离、按级脱敏、装饰器签名不变性、`/api/traces` 鉴权与 run_id 不作路径、口径回传、断线落终态、看板三处接线一致（22 项） |
 
 CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
 

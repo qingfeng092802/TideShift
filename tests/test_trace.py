@@ -275,6 +275,22 @@ def test_broken_caliber_env_falls_back(monkeypatch):
     assert st["level"] == "basic" and st["capacity"] == 64
 
 
+def test_abandoned_stream_gets_a_terminal_status():
+    """SSE 客户端断线时生成器收到的是 GeneratorExit（BaseException，不是 Exception）。
+    不落终态，追溯页上就会永远挂一条显示"进行中"的僵尸运行。"""
+    def gen():
+        with trace.run("stream"):
+            yield 1
+            yield 2
+
+    it = gen()
+    next(it)
+    it.close()
+    runs = trace.recent()
+    assert runs and runs[0]["kind"] == "stream"
+    assert runs[0]["status"] == "aborted:GeneratorExit"
+
+
 def test_nav_pages_are_wired_end_to_end():
     """加了导航项却忘了注册渲染器 / 忘了放 <section>，是"点一下才炸"的那类错误，
     所以在不启动浏览器的前提下先把三处对齐钉住。"""

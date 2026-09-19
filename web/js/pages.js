@@ -1139,6 +1139,8 @@ function _traceTag(st) {
   if (s === "ok") return '<span class="status-tag st-ok">正常</span>';
   if (s === "running") return '<span class="status-tag st-info">进行中</span>';
   if (s.indexOf("degraded") === 0) return '<span class="status-tag st-warn">降级</span>';
+  // 客户端提前断开 SSE / 请求任务被取消：既不是报错也不是"还在跑"，得单列一档
+  if (s.indexOf("aborted") === 0) return '<span class="status-tag st-warn">中断</span>';
   return `<span class="status-tag st-danger">${esc(s || "未知")}</span>`;
 }
 
