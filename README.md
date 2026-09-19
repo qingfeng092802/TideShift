@@ -28,7 +28,7 @@
   接上真实模型（`deepseek-flash`）后**同分母 32 例降到 0.938**，降在哪、哪两条是判分口径的锅，全写在 [`evals/`](evals/README.md)；
 - **会自己调参，也如实认输**：提案 → 真实 MILP 评价 → 同分辨率复验的闭环；这组数据上**没跑赢默认约束**，
   [报告](docs/parameter-search-sample.md)里就写"未跑赢"；
-- **可复现**：**238 项测试**（206 快测 + 32 slow）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
+- **可复现**：**247 项测试**（215 快测 + 32 slow）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
 
 > 三件不回避的事：内置 `data/` 是**合成演示数据**；负荷预测 XGBoost **3.12% MAPE 略输朴素基线的 3.01%**；
 > 需求响应按"放电量 × 补贴"结算，**尚未建模 CBL 基线**。全部列在[已知局限与路线图](#已知局限与路线图)。
@@ -723,15 +723,17 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **238 项**（快测 206 项 + `slow` 32 项，其中 8 项为 `eval` 标记的 agent 行为评测），
+测试规模 **247 项**（快测 215 项 + `slow` 32 项，其中 8 项为 `eval` 标记的 agent 行为评测），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
 `eval` 那 8 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 230 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+与其余 239 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。
+
+nightly 还挂了一个 `llm-eval` job 跑 `--mode llm` 真实模型评测，**但只有仓库配了 `Secrets.DEEPSEEK_API_KEY` 才跑**，没配就明确跳过并留 notice（不用绿勾冒充测过）。它**不是门禁**：入库基线是规则模式那一份，跨模式分母不同、真实模型数字又随采样浮动，所以这个 job 变红只代表"接口/凭据/流程本身坏了"，指标漂移看它上传的 `llm-latest.md` artifact。成本口径：约 6 分钟、16.5 万 token。
 
 > 若 `tests/test_server_api.py` 在某个受限环境里首个用例就失败并报
 > `PermissionError: [WinError 10013]`：那是 `TestClient` 依赖 loopback `socketpair()` 被沙箱拦截，
@@ -759,6 +761,7 @@ PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触�
 | `test_evals_run.py` | 用评测层量 agent：任务成功率、数字保真、副作用守卫、与 `reports/baseline.json` 的回归比对（`eval + slow`） |
 | `test_parameter_search.py` | 寻优 Agent 的四条护栏（越温限不可选、跨分辨率不进结论、预算与时限、噪声不算战果）+ 1 项真实 MILP |
 | `test_trace.py` | trace 的线程隔离、按级脱敏、装饰器签名不变性、`/api/traces` 鉴权与 run_id 不作路径、口径回传、断线落终态、看板三处接线一致（22 项） |
+| `test_web_assets.py` | 前端接线约定：每个本地 css/js 都带 `?v=`、缓存位等于 `__version__`、引用的文件确实存在（9 项） |
 
 CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
 
@@ -771,7 +774,8 @@ CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC
 | **首页打不开调度数据，返回 409** | 尚未求解。点击「开始求解」触发一次完整流程即可 |
 | **端口 8800 被占用** | 改 `ENERGY_PORT` 环境变量，或使用 `restart_backend.bat`（会先释放端口） |
 | **求解明显变慢（分钟级）** | 多半是 `highspy` 未装上，`pulp.HiGHS` 抛异常后静默回退到 CBC（约慢 4~5 倍）。检查 `pip show highspy` |
-| **页面报「echarts is not defined」，图表全空白** | 本地工作树的 `web/vendor/echarts.min.js` 带了 CRLF，而 `<script>` 上有 SRI `integrity` 校验 —— 差 40 个字节就哈希不符，浏览器直接拒绝执行。多见于在 `.gitattributes` 之前检出过的老工作树（新克隆不会遇到）。修复：`git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js`（`web/css/app.css`、`web/js/markdown.js` 同理，它们没有 SRI 所以只是不美观） |
+| **页面报「echarts is not defined」，图表全空白** | 本地工作树的 `web/vendor/echarts.min.js` 带了 CRLF，而 `<script>` 上有 SRI `integrity` 校验 —— 差 45 个字节（实测：脏工作树 1030900 B vs 仓库 blob 1030855 B，正好一个 CR 一字节）就哈希不符，浏览器直接拒绝执行。多见于在 `.gitattributes` 之前检出过的老工作树（新克隆不会遇到）。修复：`git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js`（`web/css/app.css`、`web/js/markdown.js` 同理，它们没有 SRI 所以只是不美观） |
+| **改了 `web/` 下的 js/css，页面却毫无变化** | 浏览器还在用旧缓存——`web/index.html` 里的 `?v=` 缓存位没跟着改动走（约定是等于 `__version__`，随发版改）。强制刷新后如果就变了，即可确认是缓存而非代码问题。现在漏 `?v=`、缓存位与版本不一致、引用了不存在的文件，都会被 `tests/test_web_assets.py` 跑红 |
 | **解释层一直是"规则模板"** | 未配置 LLM Key，或 Key 无效/网络不通——这是设计好的降级行为，不影响主流程 |
 | **上传数据后预测精度很差** | 历史数据不足 11 天会降级为朴素基线且不做物理修正，总览页会有降级告警。门槛由 `required_history_days()` 推算：滞后特征 7 天 + 测试集 3 天 + 训练下限 1 天 |
 | **DR 事件是从 `data/load/dr_signals.csv` 读的吗？** | **不是**。Web 流程按当前所选调度日**自动生成**两组默认 DR 事件（15:00–17:00 / 19:30–20:30），另支持页面手工触发与 `POST /api/dr/trigger`。`dr_signals.csv` 只是离线示例数据，其加载函数 `load_dr_signals()` 目前仅被测试引用，不在 Web 链路上——不要误以为改这个 CSV 能改变界面上的 DR 事件 |
@@ -817,6 +821,7 @@ test(thermal): 补充热模型末点边界断言
 ### 代码约定
 
 - **版本号唯一来源是 `src/__init__.py` 的 `__version__`**；改版本号后需同步更新 `CHANGELOG.md`。改动记录遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
+- **改了 `web/` 下的 css/js 就必须同步 `web/index.html` 里的 `?v=` 缓存位**（约定是等于 `__version__`，随发版一起改）。这条不是洁癖：真实踩过"新页面已经提交、git status 干干净净，但老用户打开侧栏里那个导航项根本不存在"——因为浏览器还在用旧的 `pages.js`。带 SRI 的 `vendor/echarts.min.js` 同样要带 `?v=`：**SRI 只校验内容、不影响 URL**，升级 vendor 文件时若缓存位不动，老用户拿旧字节配新哈希 → 直接 `echarts is not defined`。现在这三条由 `tests/test_web_assets.py` 盯着（缓存位存在、值等于版本、引用的文件真的在）。
 - **物理量必须标注单位与口径**，涉及收益/损耗的计算需在注释中写明公式与量纲。
 - **不得引入未声明的依赖**：新增依赖必须同步更新 `requirements.txt`，并视情况更新 `requirements-dev.txt` 与 `requirements.lock`；三份文件口径需保持一致。
 - **严禁提交凭据与运行时状态**：`config/`、`.solve_cache/`、`.env`、`logs/` 一律不入库；如发现泄漏请立即改为读取环境变量。

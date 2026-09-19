@@ -45,7 +45,8 @@
   `integrity` 校验，浏览器直接拒绝执行 → 整个看板报「echarts is not defined」、图表全空白**。
   仓库里的 blob 和 `index.html` 里那串 sha384 **都是对的**（实测：blob 归一化后哈希逐字符相等），
   坏的是这台机器上"在 `.gitattributes` 之前检出"的工作树——git 比对时会做行尾归一化，
-  所以 `git status` 显示干净，看不出任何异常；SRI 却按字节算，40 字节的差异就是致命差异。
+  所以 `git status` 显示干净，看不出任何异常；SRI 却按字节算，45 字节的差异就是致命差异
+  （复核：脏工作树 1030900 B、仓库 blob 1030855 B，差值正好等于 45 个 CR）。
   新克隆不受影响。**修复方式**：`git show HEAD:web/vendor/echarts.min.js > web/vendor/echarts.min.js`
   （`web/css/app.css` 1159 处、`web/js/markdown.js` 129 处同理，它们没有 SRI 所以只是不美观）。
   已作为常见问题写进两份 README 的 FAQ——这个坑值得被单独说一次：**行尾差异在"有 SRI 的静态资源"上
@@ -96,6 +97,29 @@
   现在记为 `aborted:GeneratorExit`，页面单列一档显示"中断"（既不算报错也不算正常）。
 - 顺带：`tests/test_server_api.py` 文件头那句"此前 1273 行 27 个端点零测试"是**会过期的计数**，
   改成不随代码漂移的表述。
+
+### 新增（Added）—— 2026-09-19 前端接线约定可测化 + nightly 真实模型评测
+
+- **`tests/test_web_assets.py`（9 项）**：`web/index.html` 里每个本地 css/js 都必须带 `?v=`、
+  值必须等于 `__version__`、引用的文件必须真的存在。起因是当天真实踩到的坑——追溯页已经提交、
+  `git status` 干干净净，但浏览器拿的还是旧 `pages.js`，侧栏里那个导航项根本不存在。
+- **`vendor/echarts.min.js` 补上 `?v=`**：带 SRI 的本地 vendor 一样吃缓存，而 **SRI 只校验内容、
+  不参与 URL**——将来升级这个文件时若缓存位不动，老用户会拿旧字节配新哈希，直接复现
+  "echarts is not defined"。已加 `?v=1.0.0`，并实测带查询串仍返回 200、字节数与仓库 blob 一致
+  （1030855 B），声明的 sha384 与磁盘文件逐字符相符。
+- **CI 多一个 nightly `llm-eval` job**：跑 `python -m evals.run_eval --mode llm`，但
+  **只有仓库配了 `Secrets.DEEPSEEK_API_KEY` 才跑**，没配就明确 notice 跳过——不用绿勾冒充测过。
+  它**不做指标门禁**（入库基线是规则模式那一份，跨模式分母不同且真实模型数字随采样浮动），
+  job 变红只代表接口/凭据/流程本身坏了；指标漂移看它上传的 `llm-latest.md` artifact。
+  成本口径：约 6 分钟、16.5 万 token。
+- 两份 README 的代码约定与 FAQ 各补一条对应说明。测试规模 **238 → 247**（快测 206 → 215）。
+
+### 修复（Fixed）—— 一处自相矛盾的字节数
+
+- SRI/CRLF 那件事的文档里写着"**40 字节差**"，与同一句里的"45 个 CRLF"对不上。复核确认：
+  脏工作树 1030900 B、仓库 blob 1030855 B，**差 45 字节 = 45 个 CR**，40 是当时的笔误。
+  两份 README 的 FAQ、本文件与面试文档一并改正。这类"细节可验证"的数字错了比不写更伤——
+  它正是被拿来证明"这人真的排查过"的东西。
 
 ### 变更（Changed）—— 跨模式比较的分母口径
 

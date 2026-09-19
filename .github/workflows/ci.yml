@@ -42,3 +42,38 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: pytest -m "" -q            # 全量（含 slow）
       - run: coverage run -m pytest -m "" -q && coverage report
+
+  llm-eval:
+    # 真实模型评测（`--mode llm`）：只在 nightly 跑，而且**必须仓库里配了
+    # Secrets.DEEPSEEK_API_KEY 才跑**；没配就明确跳过并留一条 notice——
+    # 绝不用一个"看起来跑过了"的绿勾冒充测过。
+    #
+    # 指标**不做门禁**：入库基线是规则模式那一份，跨模式分母不同、且真实模型的
+    # 数字随采样浮动（见 evals/README.md 的"回归门禁"）。这个 job 变红只意味着
+    # 接口/凭据/流程本身坏了（401、超时、用例异常），那才是要人看的。
+    # 成本口径：deepseek-flash 一轮 35 例、约 16.5 万 token、6 分钟。
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: 未配置 DEEPSEEK_API_KEY —— 跳过，不假装跑过
+        if: env.DEEPSEEK_API_KEY == ''
+        run: |
+          echo "::notice::DEEPSEEK_API_KEY 未配置，真实模型评测跳过（规则模式评测由 full-tests 覆盖）"
+      - name: 真实模型评测
+        if: env.DEEPSEEK_API_KEY != ''
+        run: python -m evals.run_eval --mode llm --model deepseek-flash
+      - name: 报告存档（供人看漂移，不做门禁）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-eval-report
+          path: evals/reports/llm-latest.*
+          if-no-files-found: ignore
