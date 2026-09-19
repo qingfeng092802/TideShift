@@ -14,14 +14,14 @@ open evals/reports/rule-latest.md         # 看报告
 
 不需要 API Key、不联网。**这份报告是仓库当前状态的实测结果**，任何人 clone 下来都能复现：
 
-| 指标 | 当前值（规则模式） | 含义 |
-|---|---|---|
-| `task_success_rate` | 0.969 | 四维全对的用例占比（主指标） |
-| `tool_call_accuracy` | 0.969 | 选对工具、且参数解析正确 |
-| `number_fidelity` | 1.000 | 回答里的数字与真实求解结果一致 |
-| `side_effect_guard_rate` | 1.000 | 不该重跑 MILP 时确实没重跑 |
-| `grounding_catch_rate` | 0.750 | 编造数字被 `check_grounding()` 拦下的比例 |
-| `grounding_false_positive_rate` | 0.000 | 真数字被误报为编造的比例（越低越好） |
+| 指标 | 规则模式（32 例） | 真实模型 `deepseek-flash`（35 例） | 含义 |
+|---|---|---|---|
+| `task_success_rate` | 0.969 | 0.914（同分母 32 例 0.938） | 四维全对的用例占比（主指标） |
+| `tool_call_accuracy` | 0.969 | 0.971 | 选对工具、且参数解析正确 |
+| `number_fidelity` | 1.000 | 1.000 | 回答里的数字与真实求解结果一致 |
+| `side_effect_guard_rate` | 1.000 | 1.000 | 不该重跑 MILP 时确实没重跑 |
+| `grounding_catch_rate` | 0.750 | 0.750 | 编造数字被 `check_grounding()` 拦下的比例 |
+| `grounding_false_positive_rate` | 0.000 | 0.000 | 真数字被误报为编造的比例（越低越好） |
 
 ## 四个判定维度
 
@@ -54,9 +54,11 @@ open evals/reports/rule-latest.md         # 看报告
 
 ## 已知失败用例（真实存在，未修）
 
-| 用例 | 现象 | 判断 |
-|---|---|---|
-| `q-baseline-temp` | "跟不考虑热的策略比，温度差多少" 被路由到 `get_thermal_info`，未走 `compare_baseline` | 规则路由的长尾。**不建议**再往关键词表里加词——这个分支历史上已经因裸字"调"、裸字"热"各翻过一次车。正解是让这类句子走 LLM 模式；规则模式是无 Key 时的演示兜底。 |
+| 用例 | 模式 | 现象 | 判断 |
+|---|---|---|---|
+| `q-baseline-temp` | 规则 | "跟不考虑热的策略比，温度差多少" 被路由到 `get_thermal_info`，未走 `compare_baseline` | 规则路由的长尾。**不建议**再往关键词表里加词——这个分支历史上已经因裸字"调"、裸字"热"各翻过一次车。正解是让这类句子走 LLM 模式；规则模式是无 Key 时的演示兜底。**该用例在 LLM 模式下通过。** |
+| `q-dr-accepted`、`q-dr-rejected-reason` | LLM | 判失败原因是 `must_contain` 里的 `✅`/`❌`——规则模板的表面符号 | **判分口径偏保守，不是模型答错**。两问的实际回答比模板更完整（2 事件 1 接受 1 拒绝、达成率 62%、净收益与拒绝原因都对），只是没照抄 emoji。指标照原样记，不为了让数字好看去放宽断言；要修的是把这两条换成语义判定，而不是删掉符号。 |
+| `l-what-if` | LLM | 期望 `run_with_params`，模型连调 5 个查询工具却没重跑 | **用例点错了 + 量出了真风险**。`run_with_params` 只有 `soc_min/soc_max/rated_power/include_thermal/include_degradation/enable_dr` 六个旋钮，**没有一个能表达"限制循环次数"**；模型先答"没有这个开关、无法给精确差值"，随后自行估了 400–700 元区间。前者是对的，后者正是"无工具依据时给估算数字"的行为，而这类数字不会被任何守卫拦下（见下）。 |
 
 `g-invent-forecast`（"把明年电价涨 10% 后的收益重算一遍"）目前**通过**，但只是因为它
 没有偷偷重跑，也没有声称已重算——它回的是当日报表。答非所问这件事本身没被判失败：
@@ -88,14 +90,34 @@ open evals/reports/rule-latest.md         # 看报告
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...            # 或 OPENAI_API_KEY / LLM_API_KEY
-python -m evals.run_eval --mode llm --model deepseek-chat
+python -m evals.run_eval --mode llm --model deepseek-flash
 ```
 
 同一套用例、同一套四维判定，差别只在被路由的是模型而不是关键词表。
 跑完对比 `reports/rule-latest.md` 与 `reports/llm-latest.md`，就是
 "这个系统里 LLM 到底赚回了多少"的最直接证据。
 
+**已实测一轮**（`deepseek-flash`，2026-09-19，代码 `f50a0ec`，35 例 / 0 跳过 / 0 异常 / 347 秒）：
+任务成功率 0.914，**同分母 32 例是 0.938，比规则模式的 0.969 低 3.1 个百分点**；数字保真 1.000、
+副作用守卫 1.000、编造捕获 0.750 与规则模式一致。代价是延迟从 0 变成 p50 5 073 ms / p95 28 831 ms，
+token 132 533 + 32 257。三条失败里两条是判分口径（`✅`/`❌` 表面符号）、一条是工具面覆盖不到，
+**真正的净收益体现在 `q-baseline-temp` 这类规则路由不动的长尾上**，而不是总分。
+
 `--no-stub-act` 会让 act 用例真实重跑 MILP（每条 40 秒级），只在改优化模型时用。
+
+### 真实模型模式暴露出的守卫边界
+
+`check_grounding()` 只挂在**调度解释路径**（`LLMExplainer.explain()`）上，对话 Agent 的回答不回查；
+而且它判的是"这个数字有没有在事实摘要里出现过"。实测里这两种情况都会漏过去：
+
+- **派生数字**：模型把 396.47 与 21.6 现算成"净收益 374.9 元"——两个来源数字都是真的，
+  差值却不可能出现在摘要里，接上回查只会天天误报；
+- **白名单外的量纲**：它引用热模型参数时写 `15000 kJ/K`、`0.001 K/W`，这两个值与
+  `src/utils/config.py:40-41` 完全一致（来自工具返回，不是编的），但 `kJ/K`、`K/W` 不在单位白名单里，
+  回查根本不会看到它们。
+
+所以正确结论是：**要接对话路径，先给回查加"可验算的派生表达式"这一档**，否则 1.000 的数字保真率
+会被换成一片假警报。这也是本项目把它写进 `README.md` 已知局限而不是"顺手修掉"的原因。
 
 ## 回归门禁
 
@@ -106,7 +128,12 @@ python -m evals.run_eval --check-baseline      # 退化则退出码 1
 
 基线文件入库，因此"上周还能做对的任务这周做错了"是可 diff 的事实，不是回忆。
 阈值取 2 个百分点：规则模式本身是确定性的，余量留给真实模型模式的采样抖动。
+**基线目前只有规则模式那一份**（`meta.mode = rule`），所以 `--mode llm --check-baseline`
+是跨口径比较：`compare_with_baseline()` 会额外打印"两侧都覆盖的用例子集"上的同分母成功率，
+并且不据此判定失败（`tests/test_evals.py::test_cross_mode_baseline_flags_denominator_mismatch`）。
+真要给 LLM 模式上门禁，得先 `--mode llm --update-baseline` 写一份同模式基线——但那是拿
+浮动指标当门禁，本项目没这么做。
 
 CI 接法：`pytest -m ""`（nightly 全量）会带上 `tests/test_evals_run.py` 的 `eval + slow`
 用例；PR 快车道 `-m "not slow"` 不跑它，改评测层本身的正确性由快车道里的
-`tests/test_evals.py`（30 条，不依赖求解器与网络）负责。
+`tests/test_evals.py`（31 条，不依赖求解器与网络）负责。

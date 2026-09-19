@@ -148,6 +148,23 @@ def test_missing_or_nan_baseline_key_is_skipped():
     assert not compare_to_baseline({}, {"tool_call_accuracy": 0.9})
 
 
+def test_cross_mode_baseline_flags_denominator_mismatch():
+    """llm 35 例比 rule 32 例不是同口径，必须补一行同分母结论，别把分母差当成退化。"""
+    from evals.run_eval import compare_with_baseline
+
+    def payload(mode, ids, passed):
+        return {"meta": {"mode": mode},
+                "metrics": {"n_cases": len(ids), "tool_call_accuracy": 0.9},
+                "results": [{"case_id": i, "passed": i in passed} for i in ids]}
+
+    base = payload("rule", ["a", "b"], {"a"})
+    cur = payload("llm", ["a", "b", "c"], {"a"})
+    _, notes = compare_with_baseline(cur, base)
+    assert any("分母不同" in n for n in notes)
+    assert any("2 例" in n and "本次 0.500 vs 基线 0.500" in n for n in notes)
+    assert compare_with_baseline(cur, cur)[1] == []
+
+
 # ---------- 记录器 ----------
 
 def test_recorder_captures_positional_args():

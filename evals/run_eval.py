@@ -18,7 +18,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from evals.harness import (BASELINE_PATH, REPORTS_DIR, build_env, load_suite,
                            run_suite)
@@ -52,7 +52,45 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
-def render_markdown(payload: Dict[str, Any], regressions: List[str]) -> str:
+def _same_denominator(cur_results: List[Dict[str, Any]],
+                      base_results: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """两侧都跑到的用例子集上的任务成功率——跨模式比较时唯一同口径的一行。"""
+    cur = {r["case_id"]: bool(r["passed"]) for r in cur_results}
+    base = {r["case_id"]: bool(r["passed"]) for r in base_results}
+    common = sorted(set(cur) & set(base))
+    if not common:
+        return None
+    return {"n": len(common),
+            "cur": sum(cur[k] for k in common) / len(common),
+            "base": sum(base[k] for k in common) / len(common)}
+
+
+def compare_with_baseline(payload: Dict[str, Any],
+                          baseline: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    """返回（退化清单, 口径提示清单）。
+
+    基线与本次的模式或用例数不同时候选指标的分母就不一样，直接报"退化 0.054"
+    是个假结论（真实发生过：llm 35 例 vs rule 32 例），所以补一行同分母口径。
+    """
+    cur_m, base_m = payload["metrics"], (baseline.get("metrics") or {})
+    regressions = compare_to_baseline(cur_m, base_m)
+    notes: List[str] = []
+    cur_mode = payload["meta"].get("mode")
+    base_mode = (baseline.get("meta") or {}).get("mode")
+    if cur_mode != base_mode or cur_m.get("n_cases") != base_m.get("n_cases"):
+        notes.append(
+            f"基线是 `{base_mode}` 模式 {base_m.get('n_cases')} 例、本次是 `{cur_mode}` 模式 "
+            f"{cur_m.get('n_cases')} 例，**分母不同**，上面的差值只能当参考。")
+        same = _same_denominator(payload.get("results") or [], baseline.get("results") or [])
+        if same:
+            notes.append(
+                f"同分母口径（两侧都覆盖的 {same['n']} 例）任务成功率："
+                f"本次 {same['cur']:.3f} vs 基线 {same['base']:.3f}。")
+    return regressions, notes
+
+
+def render_markdown(payload: Dict[str, Any], regressions: List[str],
+                    baseline_notes: Optional[Sequence[str]] = None) -> str:
     m = payload["metrics"]
     meta = payload["meta"]
     lines: List[str] = [
@@ -125,6 +163,7 @@ def render_markdown(payload: Dict[str, Any], regressions: List[str]) -> str:
         lines += [f"- `{e['id']}`：{e['error']}" for e in payload["errors"]]
 
     lines += ["", "## 与基线比较", ""]
+    lines += [f"- {n}" for n in (baseline_notes or [])]
     if regressions:
         lines += [f"- ⚠️ {r}" for r in regressions]
     else:
@@ -182,13 +221,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
 
     regressions: List[str] = []
+    baseline_notes: List[str] = []
     if os.path.exists(BASELINE_PATH):
         with open(BASELINE_PATH, "r", encoding="utf-8") as fh:
-            baseline = json.load(fh).get("metrics", {})
-        regressions = compare_to_baseline(metrics, baseline)
+            baseline = json.load(fh)
+        regressions, baseline_notes = compare_with_baseline(payload, baseline)
 
     with open(f"{prefix}-latest.md", "w", encoding="utf-8") as fh:
-        fh.write(render_markdown(payload, regressions))
+        fh.write(render_markdown(payload, regressions, baseline_notes))
 
     if args.update_baseline:
         with open(BASELINE_PATH, "w", encoding="utf-8") as fh:
@@ -202,11 +242,19 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"守卫捕获={_fmt(metrics.get('grounding_catch_rate'))} "
           f"耗时={payload['meta']['wall_seconds']}s")
     print(f"[evals] 报告：{prefix}-latest.md")
+    for n in baseline_notes:
+        print(f"[evals] 口径提示：{n}")
     for r in regressions:
         print(f"[evals] ⚠️ 退化 {r}", file=sys.stderr)
 
+    # 有口径提示 = 分母不同 = 跨模式比较，此时退化清单不能当门禁结论用
     if args.check_baseline and regressions:
-        return 1
+        if baseline_notes:
+            print("[evals] --check-baseline 落在跨口径比较上，仅告警不计失败。"
+                  "要让真实模型模式有门禁，先用同模式 --update-baseline 写一份基线。",
+                  file=sys.stderr)
+        else:
+            return 1
     return 0
 
 
