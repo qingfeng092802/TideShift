@@ -40,7 +40,11 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - run: pytest -m "" -q            # 全量（含 slow）
+      # 只跑一遍：原先这里先 `pytest -m ""` 再 `coverage run -m pytest -m ""`，
+      # 实测两步各 846 / 844 s，job 总时长 1732 s 里近一半是把 247 项重跑一遍。
+      # 覆盖率本来就是在一次运行里插桩采集的，第二遍不产生任何新证据。
+      # 计时口径注意：文档里引用的 846 s 是**合并前**那次运行（Run 35446508669）的
+      # `pytest -m ""` 单步数字；合并成一句后这一步含 coverage 开销，数字会变。
       - run: coverage run -m pytest -m "" -q && coverage report
 
   llm-eval:
