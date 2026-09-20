@@ -757,15 +757,15 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **277 项**（快测 244 项 + `slow` 33 项，其中 8 项为 `eval` 标记的 agent 行为评测），
+测试规模 **277 项**（快测 244 项 + `slow` 33 项，其中 9 项为 `eval` 标记的 agent 行为评测），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
-`eval` 那 8 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 239 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+`eval` 那 9 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
+与其余 268 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
-**发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。**v1.0.0 这道门槛已实际跑通**：247 项全绿，`pytest -m ""` 单步 846 s（Run 35446508669，`ubuntu-latest` / Python 3.13）。注意这个数是**当时布局**（pytest 与 coverage 各跑一遍）下的单步耗时，重复的那一遍后来已合并掉，所以它是那次运行的实测，不是当前布局的预测值。
+**发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。**v1.0.0 这道门槛已实际跑通**：247 项全绿，`pytest -m ""` 单步 846 s（Run 35446508669，`ubuntu-latest` / Python 3.13）。注意这个数是**当时布局**（pytest 与 coverage 各跑一遍）下的单步耗时，重复的那一遍后来已合并掉，所以它是那次运行的实测，不是当前布局的预测值。**1.1.0 也跑通了**：Run 35486570178，277 项全绿、job 851 s（`coverage run -m pytest -m ""` 那一步 805 s，覆盖率 82%），配套的 `fast-tests` 是 `244 passed, 33 deselected in 50.45 s`（Run 35478561322）。有一处要如实记下：这次全量运行里 pytest **没有打印**"N passed in Xs"那行汇总，因为命令行 `-q` 叠上 `pytest.ini` 里的 `-q` 成了 `-qq`，上面的 277 是数进度圆点（72×3 + 61）确认的——重复的 `-q` 已从工作流去掉，但要等下一次 dispatch 才见效。
 
 nightly 还挂了一个 `llm-eval` job 跑 `--mode llm` 真实模型评测，**但只有仓库配了 `Secrets.DEEPSEEK_API_KEY` 才跑**，没配就明确跳过并留 notice（不用绿勾冒充测过）。它**不是门禁**：入库基线是规则模式那一份，跨模式分母不同、真实模型数字又随采样浮动，所以这个 job 变红只代表"接口/凭据/流程本身坏了"，指标漂移看它上传的 `llm-latest.md` artifact。成本口径：约 6 分钟、16.5 万 token。
 
