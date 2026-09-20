@@ -45,7 +45,11 @@ jobs:
       # 覆盖率本来就是在一次运行里插桩采集的，第二遍不产生任何新证据。
       # 计时口径注意：文档里引用的 846 s 是**合并前**那次运行（Run 35446508669）的
       # `pytest -m ""` 单步数字；合并成一句后这一步含 coverage 开销，数字会变。
-      - run: coverage run -m pytest -m "" -q && coverage report
+      # 这里**不能再写 `-q`**：pytest.ini 的 addopts 已经带了一个 `-q`，命令行再加一个就是
+      # `-qq`，pytest 会连"N passed in Xs"那行汇总一起吞掉——这道门槛的自报计数与计时
+      # 就全丢了，只剩四行进度的圆点（Run 35486570178 就是这样，只能靠数圆点确认 277）。
+      # 上面的 fast-tests 写的是裸 `pytest`，所以它一直有汇总行。
+      - run: coverage run -m pytest -m "" && coverage report
 
   llm-eval:
     # 真实模型评测（`--mode llm`）：只在 nightly 跑，而且**必须仓库里配了
