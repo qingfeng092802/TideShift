@@ -24,7 +24,7 @@
 # 实测结果（2026-09-20，1.1.0 电价日历改版）：
 #   依赖树本次未改动，跑的是同一套 pin。
 #
-#   CI 口径（标准口径：GitHub Actions ubuntu-latest / Python 3.13.15，commit c4d220c）：
+#   CI 口径（标准口径：GitHub Actions ubuntu-latest / Python 3.13.15，main @ 70ea9ae）：
 #     快测 244 项通过 —— push 触发 Run 35478561322，`244 passed, 33 deselected in 50.45 s`，
 #       整个 job 含装依赖 92 s。
 #     全量 277 项通过 —— workflow_dispatch Run 35486570178，整个 job 851 s，
@@ -32,13 +32,17 @@
 #       插桩），报表 TOTAL 6650 stmts / 1217 miss = **82%**。
 #       ⚠️ 这次拿不到 pytest 自己的"N passed in Xs"汇总行：那一步的命令里写了 `-q`，而 pytest.ini
 #       的 addopts 已经带了一个 `-q`，两个叠加等于 `-qq`，pytest 把汇总行连同样吞了——277 这个数
-#       是数四行进度点的圆点（72×3 + 61）确认的，全绿无一失败。已在 ci.yml 去掉重复的 `-q`，
-#       该修复**尚未推上去**，所以下一次 dispatch 起才有自报计时。
+#       是数四行进度点的圆点（72×3 + 61）确认的，全绿无一失败。
+#     去掉重复 `-q` 后复跑（Run 35496788350 @ 70ea9ae）：`277 passed, 1 warning in 796.12 s
+#     (0:13:16)`，job 整跑 836 s，覆盖率仍是 82%。**以后引用全量计时以这个口径为准**——pytest
+#     自报的 796 s 是纯测试时间，job 的 836 s 另含 checkout 与装依赖。`v1.1.0` 标签就打在
+#     被这次运行验证过的 70ea9ae 上。
 #     与上一版对照：CI 的 846 s（Run 35446508669）是"pytest 与 coverage 各跑一遍"布局下
 #       `pytest -m ""` 的单步实测，重复的那一遍后来已合并；本次 805 s 是合并后布局的实测。
 #
 #   本机口径（Python 3.13.9 / Anaconda，改动过程中的自查）：
-#     快测 244 项 68 ~ 93 s（三次实测 67.7 / 75.5 / 92.8 s）；全量 277 项 832 s 全绿（`pytest -o addopts= -q`）。
+#     快测 244 项 68 ~ 93 s（三次实测 67.7 / 75.5 / 92.8 s）；全量 277 项两次 832 s / 758 s 全绿
+#     （`pytest -o addopts= -q`，同一个 commit 上重复跑就差了 74 s，所以本机计时只当量级看）。
 #     本机快测明显慢于 CI，时间几乎全在一处：`tests/test_chat_agent.py` 的 module 级 fixture
 #     真跑一次 `run_daily_scheduling`，实测 65.3 s（MILP 占满），给该文件 20 项测试共用。
 #     上一版这里记的是「215 项 / 57 s」——变慢了，但**没有归因**：本轮没有回头测旧数据下的
