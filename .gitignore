@@ -45,10 +45,13 @@ config/
 *.pkl
 *.tmp
 
-# ---------- 环境变量（含 API Key）----------
+# ---------- 环境变量与本机凭据（含 API Key、管理员口令）----------
 .env
 .env.*
 !.env.example
+# 本机启动包装会 set 明文口令，绝不能进历史（进过一次就得 rewrite history 才干净）
+start_web.local.bat
+*.local.bat
 
 # ---------- 运行日志 ----------
 logs/
