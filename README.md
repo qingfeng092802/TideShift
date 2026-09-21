@@ -309,6 +309,8 @@ python backend/server.py
 | **persistent**（默认） | 留空 | 首启：`ADMIN_INITIAL_PASSWORD` → 无则生成随机口令；此后以 `config/auth.json` 为准 | 本机长期使用、单机部署 |
 | **env** | `env` | **始终**取 `ADMIN_INITIAL_PASSWORD`，不落盘；**未设置该变量则拒绝启动**（退出码 2） | 容器 / CI / 演示环境（改环境变量即生效，重装不用清文件） |
 
+填 `ADMIN_INITIAL_PASSWORD` 请在 shell 里 `export` / `set`，或放进未被跟踪的 `start_web.local.bat`；**不要写进 `start_web.bat`**——它是被跟踪文件，明文口令一进 git 历史就得 rewrite 才能清掉。
+
 启动时会打印一行结论，直接回答"我的口令从哪来"：
 
 ```
@@ -860,7 +862,7 @@ test(thermal): 补充热模型末点边界断言
 - **改了 `web/` 下的 css/js 就必须同步 `web/index.html` 里的 `?v=` 缓存位**（约定是等于 `__version__`，随发版一起改）。这条不是洁癖：真实踩过"新页面已经提交、git status 干干净净，但老用户打开侧栏里那个导航项根本不存在"——因为浏览器还在用旧的 `pages.js`。带 SRI 的 `vendor/echarts.min.js` 同样要带 `?v=`：**SRI 只校验内容、不影响 URL**，升级 vendor 文件时若缓存位不动，老用户拿旧字节配新哈希 → 直接 `echarts is not defined`。现在这三条由 `tests/test_web_assets.py` 盯着（缓存位存在、值等于版本、引用的文件真的在）。
 - **物理量必须标注单位与口径**，涉及收益/损耗的计算需在注释中写明公式与量纲。
 - **不得引入未声明的依赖**：新增依赖必须同步更新 `requirements.txt`，并视情况更新 `requirements-dev.txt` 与 `requirements.lock`；三份文件口径需保持一致。
-- **严禁提交凭据与运行时状态**：`config/`、`.solve_cache/`、`.env`、`logs/` 一律不入库；如发现泄漏请立即改为读取环境变量。
+- **严禁提交凭据与运行时状态**：`config/`、`.solve_cache/`、`.env`、`logs/` 一律不入库。**口令一律通过环境变量（`ENERGY_AUTH_MODE=env` + `ADMIN_INITIAL_PASSWORD`）或 `config/` 目录管理，不要写进任何被跟踪的脚本**——明文口令进过一次 git 历史，删掉那行也没用，得 rewrite history 才干净；本机要放变量请写 `start_web.local.bat`（`*.local.bat` 已忽略），不要改 `start_web.bat`。
 - **测试用真实断言**：不接受只调用不断言的占位用例；涉及数值的断言应给出容差与依据。
 - **修改优化模型时必须说明对目标函数的影响**，并补充或更新对应测试。
 
