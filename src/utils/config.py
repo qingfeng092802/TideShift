@@ -106,11 +106,42 @@ class LoadConfig:
 
 
 @dataclass(frozen=True)
+class DemandTariffConfig:
+    """基本电费（容（需）量电价）配置——两部制用户账单里与电量无关的那一半。
+
+    规则出处是发改办价格〔2016〕1583号，单价出处是广东省电网企业代理购电工商业
+    用户电价表（惠州市，执行时间 2026 年 2 月）两部制 1–10（20）千伏栏；
+    逐条对应关系见 `data/README.md`「基本电价」一节。**本文件是这些数字的唯一位置**
+    （`src/utils/demand_charge.py` 只从这里读，不再抄第二份）。
+
+    `mode` 三档由用户选择（1583号原文"由用户选择"，可提前 15 个工作日按季变更）：
+      "capacity" 按变压器容量、"contract" 按合同最大需量（1583号后的默认口径）、
+      "actual" 按实际最大需量（线性，2016 年以前的老口径，不少储能宣传材料仍按它算收益）。
+    三档的**削峰价值完全不同**：contract 制下只要月峰没顶到核定值的 105%，
+    削峰一分基本电费都省不下来；actual 制下每一 kW 月峰都值钱。
+    """
+    mode: str = "contract"
+    demand_price_yuan_per_kw_month: float = 36.1     # 最大需量 元/千瓦·月
+    capacity_price_yuan_per_kva_month: float = 22.6  # 变压器容量 元/千伏安·月
+    # 受电变压器容量：内置数据集 7 月月峰 2399 kW，按功率因数 0.9 折算约 2666 kVA，
+    # 取工程上常见的 2×1600 kVA 留裕量。换用户时这是第一个要改的数。
+    transformer_kva: float = 3200.0
+    # 合同核定最大需量：真实业务里由用户自己申报（可按月变更），这里默认取
+    # "贴着历史月峰报"= 2400 kW，即一个已经把需量管理做好了的户。
+    # 低于容量总和 40% 时按 40% 核定（1583号下限），所以申报 400 kW 也白报。
+    contract_demand_kw: float = 2400.0
+    min_contract_capacity_ratio: float = 0.40
+    over_contract_band: float = 1.05        # 超过核定值 105% 起加价
+    over_band_price_multiplier: float = 2.0  # 超出部分"加一倍收取"
+
+
+@dataclass(frozen=True)
 class SystemConfig:
     """系统总配置"""
     battery: BatteryConfig = field(default_factory=BatteryConfig)
     price: PriceConfig = field(default_factory=PriceConfig)
     load: LoadConfig = field(default_factory=LoadConfig)
+    demand: DemandTariffConfig = field(default_factory=DemandTariffConfig)
 
     # 环境温度（夏季典型日，96点）
     ambient_temp_c: float = 30.0           # 基准环境温度

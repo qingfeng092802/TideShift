@@ -581,6 +581,64 @@ def dr_windows() -> list:
     return out
 
 
+def demand_block() -> dict:
+    """「基本电费（需量）」卡片的数据，口径全部来自 config.DemandTariffConfig。
+
+    只报**算得出来**的量：当日电网取电峰值（用今天这条调度）+ 整月负荷月峰（用数据集）。
+    储能对**月**峰的影响必须整月逐日求解才成立，这里刻意不做"每天都是今天这条调度"的
+    外推——那个数由命令行给：`python -m src.utils.demand_charge --demand-cap 2500`。
+    把外推值当实测值显示，是这个仓库最不能接受的错误类型。
+    """
+    from src.utils.demand_charge import (basic_charge, effective_contract_kw,
+                                         grid_import_kw, with_mode)
+
+    s = _sess()
+    viz = s.viz or {}
+    # 卡片的先决条件：有当日调度、有选中日期、有整月数据可数。
+    # 缺任何一样都返回 available=False 让前端不渲染——这张卡宁可不出现，
+    # 也不能出现一半（月峰用了别的地方的数，就是"把外推值当实测值"）。
+    if (viz.get("charge_power") is None or not getattr(s, "selected_date", "")
+            or getattr(s, "df", None) is None):
+        return {"available": False}
+    if viz.get("load_actual") is not None:
+        load, load_src = viz["load_actual"], "实际负荷"
+    else:
+        load, load_src = viz.get("load_forecast"), "预测负荷"
+    if load is None:
+        return {"available": False}
+
+    grid = grid_import_kw(load, viz["charge_power"], viz["discharge_power"])
+    month = str(s.selected_date)[:7]
+    month_rows = s.df[s.df["timestamp"].dt.strftime("%Y-%m") == month]
+    month_load_peak = (float(month_rows["load_kw"].max()) if len(month_rows)
+                       else float(np.max(load)))
+    cfg = CONFIG.demand
+    bills = {m: round(basic_charge(month_load_peak, cfg=with_mode(cfg, m)).charge_yuan, 2)
+             for m in ("capacity", "contract", "actual")}
+    r_c = basic_charge(month_load_peak, cfg=with_mode(cfg, "contract"))
+    headroom = round(r_c.band_kw - month_load_peak, 1)
+    return {
+        "available": True,
+        "mode": cfg.mode,
+        "price_demand": cfg.demand_price_yuan_per_kw_month,
+        "price_capacity": cfg.capacity_price_yuan_per_kva_month,
+        "transformer_kva": cfg.transformer_kva,
+        "contract_kw": round(effective_contract_kw(cfg), 1),
+        "band_kw": round(r_c.band_kw, 1),
+        "month": month,
+        "month_days_in_dataset": int(pd.to_datetime(month_rows["timestamp"]).dt.date.nunique()),
+        "month_load_peak_kw": round(month_load_peak, 1),
+        "day_peak_no_storage_kw": round(float(np.max(load)), 1),
+        "day_peak_schedule_kw": round(float(np.max(grid)), 1),
+        "load_source": load_src,
+        "bills": bills,
+        # 合同需量制的关键判据：月峰离 105% 阈值还有多少余量。
+        # 余量为正 = 现在削峰省不下一分钱基本电费（1583号"未超过按核定值收取"）。
+        "headroom_kw": headroom,
+        "over_band_kw": round(r_c.over_band_kw, 1),
+    }
+
+
 # ================= FastAPI 应用 =================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -872,6 +930,7 @@ def page_dashboard():
         "alerts": [str(a) for a in (getattr(rep, "alerts", None) or [])],
         "series": viz_series(viz),
         "dr_windows": dr_windows(),
+        "demand": demand_block(),
         "soc_range": [_sess().params["soc_min"], _sess().params["soc_max"]],
         "explanation": {"text": getattr(rep, "explanation", "") or "",
                         "source": getattr(rep, "explanation_source", "none") or "none"},

@@ -60,6 +60,9 @@ class ScheduleResult:
     # 求解质量字段（透传到前端显著标注，杜绝"静默垃圾解"）
     time_limit_hit: bool = False           # 是否命中求解时限（得到的是次优解）
     mip_gap_pct: float = 0.0               # 求解时的相对最优间隙容差（%）
+    # 需量侧口径（未启用需量上限时 grid_peak_kw = 0.0，表示"没算过"而不是"峰值为 0"）
+    grid_peak_kw: float = 0.0              # 电网侧取电峰值 kW（负荷 + 充电 − 放电）
+    demand_cap_kw: float = 0.0             # 本次求解施加的需量上限 kW（未启用为 0.0）
 
 
 class StorageOptimizationAgent:
@@ -86,16 +89,20 @@ class StorageOptimizationAgent:
         soc_weighted_degradation: bool = True,
         time_limit_s: int = 120,
         mip_gap: float = 0.01,
+        *,
+        load_profile_kw: Optional[np.ndarray] = None,
+        demand_cap_kw: Optional[float] = None,
     ) -> ScheduleResult:
         """
         执行优化调度
 
         参数：
             price_profile: 96点电价曲线 元/kWh
-            （本模型刻意**不接受负荷参数**：调度是价格驱动的，负荷只通过需求响应目标
-              与预测链路进入。以前这里挂过一个从未被读取的 `load_profile`，于是所有
-              `optimize(PRICE, AMB)` 形式的调用都把气温曲线绑到了它上面——气温被静默丢弃、
-              退化成常量 30 ℃，热约束随之放松。现在第 2 个位置参数就是气温。）
+            （除了下面两个显式开启需量管理的参数外，本模型不接受负荷输入：调度是
+              价格驱动的，负荷只通过需求响应目标与预测链路进入。以前这里挂过一个
+              从未被读取的 `load_profile`，于是所有 `optimize(PRICE, AMB)` 形式的调用
+              都把气温曲线绑到了它上面——气温被静默丢弃、退化成常量 30 ℃，热约束随之放松。
+              现在第 2 个位置参数就是气温，负荷只能走关键字，且只与需量上限配对出现。）
             ambient_temp_profile: 96点环境温度曲线 ℃
             initial_soc: 初始SOC
             include_thermal_constraint: 是否包含热约束
@@ -106,10 +113,32 @@ class StorageOptimizationAgent:
             soc_weighted_degradation: True=按SOC区间加权（深充深放惩罚更高，优化器会主动规避）
                                       False=退化为常数系数近似（求解更快）
             time_limit_s: 求解时限
+            load_profile_kw: 96点用户负荷 kW。只在启用需量上限时提供。
+            demand_cap_kw: 电网侧取电功率上限 kW（基本电费按最大需量计收时的申报/控制目标）。
+                给了它就加 96 条 `load + P_charge − P_discharge ≤ cap`，不新增变量。
+                动机是实测出来的：只看电价的目标函数会在谷段尾部满功率充电，与早爬坡负荷
+                叠加，把日峰顶高 300~500 kW（内置 7 月：月峰 2399 → 2782 kW），
+                在 1583 号合同需量制下反而多交基本电费。见 `src/utils/demand_charge.py`。
+
+                口径限制（不是实现缺陷）：需量按**整月**最大计收，这里施加的是**每日**上限，
+                比月约束更紧，所以是最优解的下界（可能少赚）。单日模型不知道"月峰"这个概念。
 
         返回：
             ScheduleResult
         """
+        if (demand_cap_kw is None) != (load_profile_kw is None):
+            raise ValueError(
+                "demand_cap_kw 与 load_profile_kw 必须成对给出："
+                "没有负荷曲线就无从定义电网取电，只给上限会静默退化成"
+                "对电池净功率的约束（与需量计费无关），只给负荷则上限形同未启用")
+        if demand_cap_kw is not None:
+            load_arr = np.asarray(load_profile_kw, dtype=float)
+            if load_arr.size != self.battery_cfg.num_steps:
+                raise ValueError(
+                    f"load_profile_kw 长度须为 {self.battery_cfg.num_steps}，收到 {load_arr.size}")
+        else:
+            load_arr = None
+
         n = self.battery_cfg.num_steps  # 96
         dt = self.battery_cfg.time_step_hours  # 0.25h
         cap = self.battery_cfg.rated_capacity_kwh
@@ -210,6 +239,18 @@ class StorageOptimizationAgent:
             for t in range(start_idx, end_idx):
                 prob += P_discharge[t] >= dr_req_kw
 
+        # 4.6 需量上限（基本电费按最大需量计收时才启用）
+        # 电网侧取电 = 负荷 + 充电 − 放电，逐时段钉在上限以内：
+        #   load[t] + P_charge[t] − P_discharge[t] ≤ cap
+        # 96 条线性不等式、不新增变量，所以模型规模几乎不变（实测求解时间与开环同级）。
+        # 为什么必须有这一条：只看电价的目标函数对"月最大需量"完全无感，实测它会在
+        # 谷段尾部满功率充电、与早爬坡负荷叠加，把内置 7 月的月峰从 2399 kW 顶到 2782 kW，
+        # 在 1583 号合同需量制下每月多交 1.9 万元基本电费——详见 src/utils/demand_charge.py。
+        if demand_cap_kw is not None:
+            for t in range(n):
+                prob += (load_arr[t] + P_charge[t] - P_discharge[t] <= demand_cap_kw,
+                         f"demand_cap_{t}")
+
         # ========== 5. 求解 ==========
         # 优先 HiGHS（比 CBC 快一个量级），不可用时回退 CBC（回退必打 WARNING）
         status, solver_status, time_limit_hit = self._solve(prob, time_limit_s, mip_gap)
@@ -220,7 +261,8 @@ class StorageOptimizationAgent:
         if solver_status == "Infeasible":
             raise ValueError(
                 "MILP 求解结果不可行（Infeasible）：请检查 DR 目标功率是否超过额定功率、"
-                "SOC 区间/终值约束是否自洽、热约束是否过严")
+                "SOC 区间/终值约束是否自洽、热约束是否过严、"
+                "需量上限是否低于负荷峰值减去可放电能力（cap − max(load) 为负时靠放电也顶不住）")
         if solver_status in ("Undefined", "Not Solved"):
             # 有可行 incumbent（CBC/HiGHS 超时但已找到可行解）→ 降级为次优解继续；
             # 完全无解 → 显式报错，绝不静默用垃圾解
@@ -304,6 +346,9 @@ class StorageOptimizationAgent:
             degradation_in_objective_yuan=round(float(pulp.value(degradation_expr) or 0.0), 2),
             time_limit_hit=bool(time_limit_hit),
             mip_gap_pct=round(mip_gap * 100, 3),
+            grid_peak_kw=(0.0 if load_arr is None else
+                          float(np.max(load_arr + charge_power - discharge_power))),
+            demand_cap_kw=float(demand_cap_kw or 0.0),
         )
 
     # ------------------------------------------------------------------ #

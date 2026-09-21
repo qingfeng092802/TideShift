@@ -61,6 +61,60 @@ function aiExpanderHeadInner(source) {
   return `🧠 AI 决策解释 · ${aiSourceLabel(source)}（点击展开查看）` +
     `<span style="font-size:11px;color:var(--text-3);font-weight:400;">▼</span>`;
 }
+/* 基本电费（容/需量电价）卡片。
+   口径边界写死在这里：只报"当日调度峰值"与"整月负荷月峰"两个真实算得出的量，
+   储能对**月**峰的影响需要整月逐日求解，看板不做"每天都是今天这条调度"的外推。 */
+function demandCardHTML(dm) {
+  if (!dm || !dm.available) return "";
+  const MODE_CN = {
+    capacity: "按变压器容量",
+    contract: "按合同最大需量",
+    actual: "按实际最大需量",
+    none: "单一制（不收基本电费）",
+  };
+  const over = dm.over_band_kw > 0;
+  const extra = over ? dm.over_band_kw * dm.price_demand * 2 : 0;
+  const verdict = over
+    ? `⚠️ 月峰已超 105% 阈值 <b>${dm.over_band_kw.toFixed(0)} kW</b>，超额部分按双倍计收，`
+      + `每月因此多交 <b>${fmtMoney(extra)}</b> 元`
+    : `✅ 月峰距 105% 阈值还有 <b>${dm.headroom_kw.toFixed(0)} kW</b> 余量。`
+      + `按发改办价格〔2016〕1583号，未超阈值时<b>按核定值收取</b>——`
+      + `此时削峰省不下任何基本电费，需量收益为 0`;
+  const rows = [["capacity", "容量制", dm.price_capacity + " 元/千伏安·月"],
+                ["contract", "合同需量制", dm.price_demand + " 元/千瓦·月"],
+                ["actual", "实际需量制", dm.price_demand + " 元/千瓦·月"]];
+  return `
+    <div class="section-title">基本电费（需量 / 容量电价）</div>
+    <div class="grid grid-2">
+      <div class="panel-card">
+        <div style="overflow-x:auto;"><table class="dtable"><thead><tr>
+          <th scope="col">计费方式</th><th class="r">单价</th><th class="r">月基本电费</th></tr></thead>
+        <tbody>${rows.map(([k, name, unit]) => {
+          const cur = k === dm.mode;
+          return `<tr><td>${cur ? "▶ " : ""}${esc(name)}${cur ? ' <span class="tag tag-ok">当前</span>' : ""}</td>`
+            + `<td class="r">${unit}</td><td class="r">${fmtMoney(dm.bills[k])}</td></tr>`;
+        }).join("")}</tbody></table></div>
+        <div class="info-note" style="margin-top:12px;">${verdict}</div>
+      </div>
+      <div class="panel-card">
+        <div class="metric-row"><span class="metric-label"><span class="term-tip" title="整月所有 15 分钟点里最大的电网侧取电功率，是基本电费的计费依据。">月最大需量（负荷侧）</span></span>
+          <span class="metric-value">${dm.month_load_peak_kw.toFixed(0)} kW</span></div>
+        <div class="metric-row"><span class="metric-label">合同核定值 / 105% 阈值</span>
+          <span class="metric-value">${dm.contract_kw.toFixed(0)} / ${dm.band_kw.toFixed(0)} kW</span></div>
+        <div class="metric-row"><span class="metric-label">受电变压器容量</span>
+          <span class="metric-value">${dm.transformer_kva.toFixed(0)} kVA</span></div>
+        <div class="metric-row"><span class="metric-label">当日峰值：无储能 → 本调度</span>
+          <span class="metric-value" style="color:${dm.day_peak_schedule_kw > dm.day_peak_no_storage_kw ? "var(--warning)" : "var(--success)"};">${dm.day_peak_no_storage_kw.toFixed(0)} → ${dm.day_peak_schedule_kw.toFixed(0)} kW</span></div>
+        <div class="info-note" style="margin-top:12px;">
+          📐 当日峰值按 <b>${esc(dm.load_source)}</b> 计；只看电价的目标函数会在谷段尾部满功率充电、
+          与早爬坡负荷叠加，把<b>日峰顶高</b>——这一行就是那个现象的实测值。
+          月口径要整月逐日求解才成立，看命令行复盘：<span style="font-family:var(--font-mono, ui-monospace, Consolas, monospace);font-size:11.8px;">python -m src.utils.demand_charge --demand-cap 2500</span>。
+          单价出处：广东省电网企业代理购电工商业用户电价表（惠州市，执行 2026 年 2 月）两部制 1–10 千伏栏。
+        </div>
+      </div>
+    </div>`;
+}
+
 function aiExpanderHTML(exp) {
   return `<div class="ai-expander${exp.source === "llm" ? " open" : ""}" id="ai-exp">
     <!-- head 为 <button>（键盘可达，原生 Enter/Space 触发）；此前是 div 仅绑 click，键盘用户无法操作 -->
@@ -165,6 +219,8 @@ function renderDashboard(root, d) {
         <div class="info-note" style="margin-top:12px;">📈 <b>年化估算</b>：套利${d.annual.arb}万 + DR${d.annual.dr}万(按 50 天/年) - 衰减${d.annual.deg}万 = <b>净收益${d.annual.net}万元/年</b></div>
       </div>
     </div>
+
+    ${demandCardHTML(d.demand)}
 
     <div class="section-title">24小时调度概览</div>
     <div class="chart-card"><div class="chart" id="ov-sched24" style="height:560px;"></div></div>
