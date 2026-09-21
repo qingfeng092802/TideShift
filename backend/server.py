@@ -29,6 +29,7 @@ import contextvars
 import hashlib
 import uuid
 import time
+import asyncio
 import urllib.request as _ureq
 from typing import Optional
 
@@ -59,7 +60,7 @@ from src import __version__
 from src.utils import cache_security
 from src.utils.config import use_config, active_config
 from src.utils.logger import get_logger
-from src.utils.url_guard import assert_safe_llm_url, SSRFBlockedError
+from src.utils.url_guard import assert_safe_llm_url, normalize_llm_base_url, SSRFBlockedError
 from src.services import model_config_service
 from dataclasses import replace
 
@@ -1466,7 +1467,7 @@ def test_provider(req: ProviderTestReq):
     key = provider.get("api_key") or stored or os.getenv("DEEPSEEK_API_KEY", "")
     if not key:
         return {"ok": False, "msg": "未配置 API Key"}
-    base = (provider.get("base_url") or "").rstrip("/")
+    base = normalize_llm_base_url(provider.get("base_url") or "")
     if not base:
         return {"ok": False, "msg": "Base URL 为空"}
     try:
@@ -1527,14 +1528,15 @@ class ChatReq(BaseModel):
 def chat(req: ChatReq):
     if not ensure_solved():
         raise HTTPException(409, "not solved")
-    _sess().chat_history.append({"role": "user", "content": req.message})
-    key, base, model, _ = _sess().active_llm()
+    with _sess().lock:
+        _sess().chat_history.append({"role": "user", "content": req.message})
+    key, base, model, params = _sess().active_llm()
     ctx = AgentContext(coordinator=_sess().coordinator, report=_sess().report, baseline=_sess().baseline,
                        viz_data=_sess().viz, dr_signals=_sess().dr_signals, historical_data=_sess().df,
                        selected_date=_sess().selected_date, engine=_sess().engine,
                        schedule=_sess().viz.get("final_schedule") if isinstance(_sess().viz, dict) else None,
                        llm_api_key=key, llm_base_url=base, llm_model=model)
-    agent = create_agent(ctx, api_key=key, base_url=base, model=model)
+    agent = create_agent(ctx, api_key=key, base_url=base, model=model, params=params)
     _rt = trace.current_run()
     if _rt is not None:
         _rt.attrs.update(mode=getattr(agent, "mode", "unknown"),
@@ -1545,25 +1547,51 @@ def chat(req: ChatReq):
     except Exception as e:
         response = f"⚠️ 对话Agent异常：{type(e).__name__}: {e}"
     # chat_history 只 append 不裁剪 → 环形上限 200 条（返回窗口仍是最近 16 条）
+    # 读写都要在锁内：/api/chat 是 sync 端点，FastAPI 放线程池跑，
+    # 与事件循环里的 /api/chat/stream 真的会并发改同一个 list。
     s = _sess()
-    s.chat_history.append({"role": "assistant", "content": response})
-    if len(s.chat_history) > 200:
-        del s.chat_history[:-200]
+    with s.lock:
+        s.chat_history.append({"role": "assistant", "content": response})
+        if len(s.chat_history) > 200:
+            del s.chat_history[:-200]
+        tail = s.chat_history[-16:]
     # 对话工具可能重跑调度：回写必须在会话锁内，否则并发请求会读到半更新的结果
     if ctx.report is not None and ctx.report is not s.report:
         with s.lock:
             s.coordinator, s.report, s.baseline, s.viz = ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data
-    return {"reply": response, "history": s.chat_history[-16:],
-            "mode": getattr(agent, "mode", "unknown")}
+    return {"reply": response, "history": tail,
+            "mode": getattr(agent, "mode", "unknown"),
+            "notice": getattr(agent, "fallback_reason", "") or ""}
+
+
+# 流式静默多久发一次心跳。取 2 s：短到能在页面上给出"还在干活"的反馈，
+# 长到不会在一次正常 token 间隔之间塞满无用事件。
+_SSE_IDLE_S = 2.0
+
+
+async def _respond_in_thread(agent, message: str):
+    """非流式回复也产出 ("content", text)，让上面的心跳循环只有一种输入。
+
+    关键是**必须换线程**：`agent.respond` 是同步的，规则模式下它可能直接跑一次
+    MILP（实测 solve p50 49.7 s）。在 `async def` 端点里原地调用它，冻住的是整个
+    事件循环——看板所有接口、进度轮询一起停摆，而且心跳自己也发不出去。
+    """
+    yield "content", await asyncio.to_thread(agent.respond, message)
 
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatReq):
     """流式对话（SSE）。
 
-    协议：逐条 `data: {"delta": "..."}`，结束发 `data: {"done": true, "history": [...]}`。
+    协议（每条都是 `data: {json}\\n\\n`）：
+      `{"delta": "..."}`       正文增量，进 history
+      `{"reasoning": "..."}`   思维链增量，**不**进正文也不进 history，前端折叠显示
+      `{"heartbeat": 4.0}`     静默秒数（工具在跑 MILP），仅用于前端提示
+      `{"notice": "..."}`      降级/告警说明，一次对话最多一条
+      `{"done": true, "history": [...], "mode": "..."}` 收尾
     是否真正逐字由 llm_params.stream 决定——前端只实现一套解析逻辑：
     开关关闭时服务端一次性发出整段 delta，视觉上等同「整段返回」。
+    前端对未识别的键一律忽略，所以加事件种类不破坏旧页面。
 
     ⚠️ 追溯 run 开在 `gen()` **里面**，不能用 `@trace.traced` 包这个端点：装饰器的
     `with` 只圈到"生成器对象被创建"那一刻就退出，真正的 LLM 调用与工具执行发生在
@@ -1576,14 +1604,15 @@ async def chat_stream(req: ChatReq):
     # ⚠️ contextvar（_CURRENT_SESSION）在流式生成器的执行上下文中不保证可见，
     # 因此在进入生成器之前把会话对象捕获进闭包，生成器内一律用 s。
     s = _sess()
-    s.chat_history.append({"role": "user", "content": req.message})
+    with s.lock:
+        s.chat_history.append({"role": "user", "content": req.message})
     key, base, model, params = s.active_llm()
     ctx = AgentContext(coordinator=s.coordinator, report=s.report, baseline=s.baseline,
                        viz_data=s.viz, dr_signals=s.dr_signals, historical_data=s.df,
                        selected_date=s.selected_date, engine=s.engine,
                        schedule=s.viz.get("final_schedule") if isinstance(s.viz, dict) else None,
                        llm_api_key=key, llm_base_url=base, llm_model=model)
-    agent = create_agent(ctx, api_key=key, base_url=base, model=model)
+    agent = create_agent(ctx, api_key=key, base_url=base, model=model, params=params)
     use_stream = bool(params.get("stream")) and callable(getattr(agent, "astream", None))
 
     def _sse(obj) -> str:
@@ -1591,34 +1620,70 @@ async def chat_stream(req: ChatReq):
 
     async def gen():
         acc = []
+        notice = getattr(agent, "fallback_reason", "") or ""
         with trace.run("chat_stream",
                        mode=getattr(agent, "mode", "unknown"),
                        date=s.selected_date, stream=use_stream,
                        question_len=len(req.message or "")):
+            if notice:
+                # 降级原因先于正文到达：前端据此在气泡上方挂横幅。
+                # 只写日志等于没写——用户看到的只是"回复很机械"。
+                yield _sse({"notice": notice})
+            source = (agent.astream(req.message) if use_stream
+                      else _respond_in_thread(agent, req.message))
+            ait = source.__aiter__()
+            nxt = None
             try:
-                if use_stream:
-                    async for delta in agent.astream(req.message):
-                        acc.append(delta)
-                        yield _sse({"delta": delta})
-                else:
-                    text = agent.respond(req.message)
-                    acc.append(text)
-                    yield _sse({"delta": text})
+                # 心跳：工具里的 MILP 单次求解实测 p50 49.7 s / max 68.2 s
+                # （追溯日志 solve 口径），这段时间流上一个字节都没有。
+                # 前端因此在静默超过 _SSE_IDLE_S 时收到 heartbeat，用来显示
+                # "正在求解"；同时避免任何中间层按空闲超时掐连接。
+                idle = 0.0
+                while True:
+                    if nxt is None:
+                        nxt = asyncio.ensure_future(ait.__anext__())
+                    try:
+                        # shield：wait_for 超时默认会 cancel 掉被等的任务，
+                        # 那样下一次读的就是"已被取消的 __anext__"，整条流就断了。
+                        kind, piece = await asyncio.wait_for(
+                            asyncio.shield(nxt), _SSE_IDLE_S)
+                    except asyncio.TimeoutError:
+                        idle += _SSE_IDLE_S
+                        yield _sse({"heartbeat": round(idle, 1)})
+                        continue
+                    except StopAsyncIteration:
+                        break
+                    nxt = None
+                    idle = 0.0
+                    if kind == "reasoning":
+                        # 思维链不进 acc：它不是回复正文，不该进 history、
+                        # 也不该被 Markdown 渲染成正文的一部分。
+                        yield _sse({"reasoning": piece})
+                    else:
+                        acc.append(piece)
+                        yield _sse({"delta": piece})
             except Exception as e:
                 msg = f"⚠️ 对话Agent异常：{type(e).__name__}: {e}"
                 acc.append(msg)
                 yield _sse({"delta": msg})
-
-            response = "".join(acc) or "（空回复）"
-            s.chat_history.append({"role": "assistant", "content": response})
-            if len(s.chat_history) > 200:
-                del s.chat_history[:-200]
+            finally:
+                if nxt is not None:
+                    nxt.cancel()
+                # 回合必须闭合：客户端中途断开时，旧实现只 append 了 user 那条，
+                # history 里就永久留下一句没有回复的提问，下一轮再叠上去，
+                # 上下文顺序整个错位。
+                response = "".join(acc) or "（空回复）"
+                with s.lock:
+                    s.chat_history.append({"role": "assistant", "content": response})
+                    if len(s.chat_history) > 200:
+                        del s.chat_history[:-200]
+                    tail = s.chat_history[-16:]
             # 与 /api/chat 一致：工具可能重跑调度 → 同步最新结果
             if ctx.report is not None and ctx.report is not s.report:
                 with s.lock:
                     s.coordinator, s.report, s.baseline, s.viz = (
                         ctx.coordinator, ctx.report, ctx.baseline, ctx.viz_data)
-            yield _sse({"done": True, "history": s.chat_history[-16:],
+            yield _sse({"done": True, "history": tail,
                         "mode": getattr(agent, "mode", "unknown")})
 
     return StreamingResponse(
@@ -1628,14 +1693,18 @@ async def chat_stream(req: ChatReq):
 
 @app.post("/api/chat/clear")
 def chat_clear():
-    _sess().chat_history = [{"role": "assistant",
-                       "content": "对话已清空。可以问我收益、温度、调度原因，或让我调参重跑。"}]
-    return {"ok": True, "history": _sess().chat_history}
+    s = _sess()
+    with s.lock:
+        s.chat_history = [{"role": "assistant",
+                           "content": "对话已清空。可以问我收益、温度、调度原因，或让我调参重跑。"}]
+        return {"ok": True, "history": list(s.chat_history)}
 
 
 @app.get("/api/chat/history")
 def chat_history():
-    return {"history": _sess().chat_history[-16:]}
+    s = _sess()
+    with s.lock:
+        return {"history": s.chat_history[-16:]}
 
 
 # ---------------- 认证 ----------------

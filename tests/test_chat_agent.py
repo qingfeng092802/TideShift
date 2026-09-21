@@ -220,5 +220,131 @@ def test_report_answers_carry_matching_numbers(tools, question, attr):
     assert number_in_text(float(getattr(report, attr)), answer, tol=0.5), answer
 
 
+# ========== 流式输出：工具结果不许冒充模型的话 ==========
+
+def test_tool_chunks_are_recognised_and_dropped():
+    """`stream_mode="messages"` 连 ToolMessage 一起产出，必须识别出来。
+
+    实测过的症状：用户开了「流式输出」却看到回答"一次性全出来"——因为第一个
+    delta 是整段工具报表原文（0.57 s 一次性到达），模型自己的几十个 token
+    挤在其后约 170 ms 内，视觉上就是"瞬间出现"。
+    """
+    from src.agents.chat_agent import _is_tool_chunk
+
+    class Toolish:
+        type = "tool"
+
+    class AIMessageChunkish:
+        type = "ai"
+
+    assert _is_tool_chunk(Toolish())
+    assert not _is_tool_chunk(AIMessageChunkish())
+    # 没有 type 属性时按类名兜底，别把未知类型整块当增量放行
+    assert _is_tool_chunk(type("ToolMessage", (), {})())
+
+
+def test_astream_yields_only_model_deltas():
+    """astream 产出 ("content"|"reasoning", 文本)，工具消息的文本不许出现。"""
+    import asyncio
+    from src.agents.chat_agent import LLMAgent
+
+    class Chunk:
+        def __init__(self, text, kind, reasoning=""):
+            self.content, self.type = text, kind
+            self.additional_kwargs = {"reasoning_content": reasoning} if reasoning else {}
+
+    class FakeExecutor:
+        async def astream(self, _inp, stream_mode=None):
+            assert stream_mode == "messages", "端点依赖 messages 模式，改这里要一起改"
+            yield Chunk("📊 能效报表：净收益 1567.82 元", "tool"), {}
+            yield Chunk("", "ai", "先取报表再换算"), {}
+            yield Chunk("今日", "ai"), {}
+            yield Chunk("", "ai"), {}            # 空增量应被跳过
+            yield Chunk("净收益 1567.82 元", "ai"), {}
+
+    agent = LLMAgent.__new__(LLMAgent)          # 不触发 langchain 初始化
+    agent.executor = FakeExecutor()
+    out = asyncio.run(_collect(agent))
+    assert out == [("reasoning", "先取报表再换算"),
+                   ("content", "今日"),
+                   ("content", "净收益 1567.82 元")], out
+    # 思维链与正文必须是两种 kind：混进正文会进 history 并被当正文渲染
+    assert all(k in ("content", "reasoning") for k, _ in out)
+
+
+async def _collect(agent):
+    return [(k, d) async for k, d in agent.astream("今天净收益多少")]
+
+
+def test_no_key_fallback_says_streaming_will_not_work(caplog):
+    """没配 Key 时回退规则模式必须留下话，并且点名"流式开关此时不生效"。
+
+    守的是可诊断性：规则模式没有 astream，`use_stream` 恒为 False，
+    日志里什么都不写的话，排查的人会先去查 langchain 装没装（这次就白查了一轮）。
+    """
+    import logging
+    from src.agents.chat_agent import RuleBasedAgent, AgentContext, create_agent
+
+    with caplog.at_level(logging.INFO, logger="energy_dispatch.chat_agent"):
+        agent = create_agent(AgentContext(), api_key="")
+    assert isinstance(agent, RuleBasedAgent)
+    assert not hasattr(agent, "astream")
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "未配置 API Key" in joined and "流式" in joined
+    # 日志不算交付：界面拿得到原因才算透传
+    assert "未配置 API Key" in agent.fallback_reason
+
+
+def test_fallback_reason_survives_init_failure(monkeypatch):
+    """LLM 初始化抛异常时，原因要挂在 agent 上，而不是只进日志。"""
+    import src.agents.chat_agent as mod
+    from src.agents.chat_agent import AgentContext, RuleBasedAgent
+
+    def boom(*_a, **_k):
+        raise RuntimeError("base url 拒绝连接")
+
+    monkeypatch.setattr(mod, "LLMAgent", boom)
+    agent = create_agent(AgentContext(), api_key="sk-x", model="deepseek-chat")
+    assert isinstance(agent, RuleBasedAgent)
+    assert "base url 拒绝连接" in agent.fallback_reason
+
+
+@pytest.mark.parametrize("utterance,want_tool", [
+    # 「协调一下」含子串"调一下"，曾被当成调参动作词，真的跑了一次 MILP
+    ("帮我协调一下SOC上限和负荷的关系", None),
+    ("今天的调度策略是按什么安排的", None),
+    ("address the throughput issue", None),        # 裸子串 "dr" 不再命中
+    ("把SOC上限调到80%重跑", "run_with_params"),
+    ("调整为放电功率1200kW再跑", "run_with_params"),
+])
+def test_adjust_verb_requires_real_verb(tools, utterance, want_tool):
+    t, _ = tools
+    rec, answer = _routed_tools(t, utterance)
+    got = [c.tool for c in rec.calls]
+    if want_tool is None:
+        assert got != ["run_with_params"], f"{utterance} 不该触发重跑，实得 {answer}"
+    else:
+        assert got == [want_tool], answer
+
+
+def test_llm_params_reach_the_chat_model():
+    """设置页的 temperature/max_tokens/timeout 必须真的进模型构造参数。
+
+    此前硬编码 temperature=0、从不带 max_tokens：界面上调采样参数没反应。
+    测纯函数 `_llm_kwargs`，不构造 langchain 对象（那要联网装依赖）。
+    """
+    from src.agents.chat_agent import _llm_kwargs
+
+    kw = _llm_kwargs("sk-x", "https://api.deepseek.com", "deepseek-chat",
+                     {"temperature": 0.7, "max_tokens": 4096, "timeout": 30})
+    assert (kw["temperature"], kw["max_tokens"], kw["timeout"]) == (0.7, 4096, 30)
+    # Base URL 归一化：DeepSeek 文档里带 /v1 与不带两种写法都要能打通
+    assert kw["base_url"] == "https://api.deepseek.com/v1"
+    # 没配 llm_params 时退回旧行为（temperature 0、不限长），不是凭空造限制
+    empty = _llm_kwargs("sk-x", "", "m", None)
+    assert empty["temperature"] == 0 and "max_tokens" not in empty
+    assert "base_url" not in empty
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

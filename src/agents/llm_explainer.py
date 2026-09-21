@@ -29,6 +29,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from src.utils import trace
+from src.utils.url_guard import normalize_llm_base_url
 
 import numpy as np
 
@@ -57,7 +58,7 @@ def set_default_credentials(api_key: Optional[str] = None,
     仅影响未显式传参的调用点；显式传参依然优先。
     """
     _DEFAULT_CREDS["api_key"] = (api_key or "").strip() or None
-    _DEFAULT_CREDS["base_url"] = (base_url or "").strip().rstrip("/") or None
+    _DEFAULT_CREDS["base_url"] = normalize_llm_base_url(base_url or "") or None
     _DEFAULT_CREDS["model"] = (model or "").strip() or None
 
 
@@ -75,7 +76,7 @@ def resolve_llm_credentials(
            or os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "")
     url = base_url or _DEFAULT_CREDS["base_url"] or os.getenv("LLM_BASE_URL") or DEFAULT_BASE_URL
     mdl = model or _DEFAULT_CREDS["model"] or os.getenv("LLM_MODEL") or DEFAULT_MODEL
-    return key.strip(), url.rstrip("/"), mdl
+    return key.strip(), normalize_llm_base_url(url), mdl
 
 
 # ========== 极薄 OpenAI 兼容客户端 ==========

@@ -15,6 +15,15 @@ async function _handleResp(r) {
   }
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
+    // must_change 期间的 403 必须在这里就地转成"改密引导"，不能只抛错：
+    // boot() 里第一个受保护请求就是 /api/bootstrap，它一抛，后面的 renderNav /
+    // bindGlobal / showPage 全都不执行 —— 页面停在白屏，改密浮层永远没有触发点。
+    // 注意**不**清 token：/api/auth/change-password 自身要带 JWT。
+    if (r.status === 403 && body && body.must_change) {
+      if (window.__requireChangePassword) window.__requireChangePassword();
+      const e = new Error(body.detail || "首次登录请先修改初始口令");
+      e.status = 403; e.mustChange = true; e.body = body; throw e;
+    }
     const detail = Array.isArray(body.detail)
       ? body.detail.map((d) => `${(d.loc || []).slice(-1)[0] || ""}: ${d.msg}`).join("；")
       : body.detail;

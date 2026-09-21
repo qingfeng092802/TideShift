@@ -14,11 +14,38 @@
 """
 import os
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 
 
 class SSRFBlockedError(ValueError):
     """Base URL 未通过 SSRF 安全校验"""
+
+
+def normalize_llm_base_url(base: str) -> str:
+    """归一化 OpenAI 兼容 Base URL：去掉尾部斜杠，**主机根路径自动补 `/v1`**。
+
+    只补"路径为空"这一种确定情形。用户显式写了路径就原样保留——
+    `/compatible-mode/v1`（DashScope）、`/api/llm/v3`（自建网关）、
+    `/openai/deployments/xxx`（Azure）各自形状不同，猜不得。
+
+    存在理由：DeepSeek 官方文档同时给出 `https://api.deepseek.com` 和
+    `https://api.deepseek.com/v1` 两种写法，而 OpenAI SDK 是**直接拼接**
+    `base_url + "/chat/completions"`，不会自动补 `/v1`。用户按前者填，
+    得到的是 404，界面上只写着"失败"，看不出是路径少了一段。
+
+    不校验协议/主机（那是 assert_safe_llm_url 的职责），也不抛异常：
+    解析不出主机名就原样返回，让下游的 SSRF 校验去给最终用户报错。
+    """
+    url = (base or "").strip().rstrip("/")
+    if not url:
+        return url
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return url
+    if not u.netloc or (u.path and u.path != "/"):
+        return url
+    return urlunsplit((u.scheme, u.netloc, "/v1", "", ""))
 
 
 def assert_safe_llm_url(base: str):

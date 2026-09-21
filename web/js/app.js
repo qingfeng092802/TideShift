@@ -16,6 +16,19 @@ function syncSidebarTrack() {
   if (sb) $("#app").classList.toggle("sb-closed", sb.classList.contains("collapsed"));
 }
 
+// 思维链节点：全程只用 textContent。它是模型原文，一旦走 renderMarkdown/innerHTML
+// 就等于把"往页面里写标记"的能力交回了模型手上。
+function makeThinkNode(text) {
+  const box = document.createElement("details");
+  box.className = "chat-think";
+  const sum = document.createElement("summary");
+  sum.textContent = "🧠 思考过程";
+  const pre = document.createElement("pre");
+  pre.textContent = text || "";
+  box.append(sum, pre);
+  return box;
+}
+
 const App = {
   /* ---------- 启动 ---------- */
   async boot() {
@@ -25,7 +38,15 @@ const App = {
     if (localStorage.getItem("anim") === "0") document.documentElement.classList.add("no-anim");
     if (localStorage.getItem("compact") === "1") document.documentElement.classList.add("compact");
     this.renderThemeIcon();
-    State.boot = await API.get("/api/bootstrap");
+    try {
+      State.boot = await API.get("/api/bootstrap");
+    } catch (e) {
+      // must_change：_handleResp 已经把改密浮层弹出来了，这里静默返回即可，
+      // 不能再往下抛——抛出去就是 unhandled rejection + 白屏，页面上连一行字都没有。
+      // 其余错误（服务没起、网络断）也要留一行可见的话，别让人对着白屏猜。
+      if (!e.mustChange) toast("初始化失败：" + e.message, "err");
+      return;
+    }
     // 版本号单一事实来源——侧栏副标题从 /api/bootstrap 动态渲染，不再硬编码
     const bs = $("#brand-sub");
     if (bs && State.boot.version) bs.textContent = `多智能体调度 v${State.boot.version} · LLM 解释层`;
@@ -419,13 +440,18 @@ window.__showLogin = function () {
       if (d.must_change) {
         // P1 修复：原生 prompt() → uiPrompt 弹窗（与全局 UI 风格一致，支持 Enter 确认）
         const np = await uiPrompt("首次登录请设置新口令（至少 8 位）：", { minLength: 8 });
+        let changed = false;
         if (np && np.length >= 8) {
           const cr = await fetch("/api/auth/change-password", {
             method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + d.token },
             body: JSON.stringify({ old_password: p, new_password: np }),
           });
-          if (!cr.ok) toast("口令修改失败，可稍后在设置中重试", "err");
+          changed = cr.ok;
+          if (!changed) toast("口令修改失败，可在弹窗中重试", "err");
         }
+        // 没改成就不能 reload：带着一个全接口 403 的 token 回首页只会白屏。
+        // 交给改密浮层，它有自己的重试与"退出登录"活口。
+        if (!changed) { dlg.remove(); window.__requireChangePassword(p); return; }
       }
       dlg.remove();
       location.reload();
@@ -436,6 +462,62 @@ window.__showLogin = function () {
   $("#login-btn").addEventListener("click", doLogin);
   dlg.addEventListener("keydown", (ev) => { if (ev.key === "Enter") doLogin(); });
   setTimeout(() => $("#login-pass").focus(), 50);
+};
+
+/* must_change 期间的改密引导。存在理由：这是白屏的唯一出口。
+   此前改密只在"登录成功后"用 uiPrompt 顺手问一次，用户一取消或改密失败，
+   代码照样 location.reload()，于是带着一个所有 /api/* 都 403 的 token 回到首页，
+   boot() 第一个请求就抛错 → 白屏，且再没有任何界面能救回来。
+   退出按钮是刻意留的活口：没有它，浮层本身就是第二个死锁。 */
+window.__requireChangePassword = function (prefillOld) {
+  if (document.getElementById("pwd-veil")) return;
+  const dlg = document.createElement("dialog");
+  dlg.id = "pwd-veil";
+  dlg.innerHTML = `
+    <div class="login-logo">🔐</div>
+    <div class="login-title">请先修改初始口令</div>
+    <div class="login-sub">首次登录（或口令为初始值）时，除改密外的接口一律 403。</div>
+    <div class="field"><label for="pw-old">原口令</label><input id="pw-old" type="password" autocomplete="current-password"></div>
+    <div class="field"><label for="pw-new">新口令（至少 8 位）</label><input id="pw-new" type="password" autocomplete="new-password"></div>
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <button class="btn btn-primary" id="pw-btn" style="flex:1;">确认修改</button>
+      <button class="btn" id="pw-out" style="flex:1;">退出登录</button>
+    </div>
+    <div id="pw-msg" class="caption" style="margin-top:8px;color:var(--danger,#ff6b6b);"></div>`;
+  document.body.appendChild(dlg);
+  dlg.addEventListener("cancel", (e) => e.preventDefault());   // Esc 不给关，关掉就是白屏
+  if (prefillOld) dlg.querySelector("#pw-old").value = prefillOld;
+  dlg.showModal();
+  const msg = dlg.querySelector("#pw-msg");
+  const submit = async () => {
+    const o = dlg.querySelector("#pw-old").value, n = dlg.querySelector("#pw-new").value;
+    if (!o || !n) { msg.textContent = "原口令与新口令都要填"; return; }
+    if (n.length < 8) { msg.textContent = "新口令至少 8 位"; return; }
+    const btn = dlg.querySelector("#pw-btn");
+    btn.disabled = true; msg.textContent = "提交中…";
+    try {
+      const r = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ old_password: o, new_password: n }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 401) {          // token 过期：回到登录层，别卡在改密框里
+        authLogout(); dlg.remove(); window.__showLogin(); return;
+      }
+      if (!r.ok) { msg.textContent = d.detail || `修改失败（HTTP ${r.status}）`; return; }
+      dlg.remove();
+      location.reload();               // 只有真改成功才重载，否则又是白屏一趟
+    } catch (e) {
+      msg.textContent = "请求失败：" + e.message;
+    } finally { btn.disabled = false; }
+  };
+  dlg.querySelector("#pw-btn").addEventListener("click", submit);
+  dlg.querySelector("#pw-out").addEventListener("click", () => {
+    authLogout(); dlg.remove(); window.__showLogin();
+  });
+  dlg.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
+  setTimeout(() => dlg.querySelector(prefillOld ? "#pw-new" : "#pw-old").focus(), 50);
 };
 
 /* 启动即检查会话：无 token 先登录再拉 bootstrap */
@@ -513,13 +595,23 @@ Object.assign(App, {
     const box = $("#chat-msgs");
 
     // 助手气泡：流式过程中原地更新（开启流式输出时逐字显示）
+    // 三个互不覆盖的区块：aux（降级说明/求解等待）、think（思维链）、main（正文）。
+    // 分开是因为 paint 会整体重写正文的 innerHTML——若把 <details> 一起重绘，
+    // 用户刚手动展开的思考过程会在下一个 token 被折叠回去。
     const holder = document.createElement("div");
     holder.className = "msg bot";
-    holder.innerHTML = `<div class="avatar">🤖</div><div class="bubble"><span class="spinner" style="display:inline-block;vertical-align:-4px;"></span> 思考中…</div>`;
+    holder.innerHTML = `<div class="avatar">🤖</div><div class="bubble">
+      <div class="chat-aux" style="display:none;"></div>
+      <div class="chat-main"><span class="spinner" style="display:inline-block;vertical-align:-4px;"></span> 思考中…</div>
+    </div>`;
     box.appendChild(holder);
     box.scrollTop = box.scrollHeight;
+    const aux = holder.querySelector(".chat-aux");
+    const main = holder.querySelector(".chat-main");
+    let think = null;   // 首个 reasoning 事件到达时才建节点
 
     let acc = "";
+    let thinking = "";
     let gotDone = false;
     // Markdown 全量重渲有开销，流式期间节流到 ~16fps；结束后 renderChat 会做最终全量重绘
     let lastPaint = 0;
@@ -527,8 +619,7 @@ Object.assign(App, {
       const now = performance.now();
       if (now - lastPaint < 60) return;
       lastPaint = now;
-      const b = holder.querySelector(".bubble");
-      if (b) b.innerHTML = renderMarkdown(acc);
+      main.innerHTML = renderMarkdown(acc);
       box.scrollTop = box.scrollHeight;
     };
     try {
@@ -562,6 +653,21 @@ Object.assign(App, {
           let pl;
           try { pl = JSON.parse(ev.slice(5).trim()); } catch { continue; }
           if (typeof pl.delta === "string") { acc += pl.delta; paint(); }
+          if (typeof pl.reasoning === "string") {
+            thinking += pl.reasoning;
+            if (!think) { think = makeThinkNode(""); main.before(think); }
+            think.querySelector("pre").textContent = thinking;
+            box.scrollTop = box.scrollHeight;
+          }
+          if (typeof pl.notice === "string" && pl.notice) {
+            aux.style.display = "";
+            aux.textContent = "⚠️ " + pl.notice;
+          }
+          if (typeof pl.heartbeat === "number") {
+            // 工具在跑 MILP（实测单次求解 p50 49.7 s），这段时间一个 token 都没有
+            aux.style.display = "";
+            aux.textContent = `⏳ 正在执行工具/求解，已等待 ${pl.heartbeat.toFixed(0)} s…`;
+          }
           if (pl.done) { gotDone = true; if (pl.history) State.chatHistory = pl.history; }
         }
       }
@@ -573,6 +679,18 @@ Object.assign(App, {
       State.chatHistory = State.chatHistory.slice(-16);
     }
     this.renderChat();
+    // renderChat 整体重绘会带走流式期间的思维链/提示节点，这里重新挂到最后一条气泡上。
+    // 思维链不入 history（它不是回复正文），所以只能由本次请求的内存变量重建。
+    const lastBot = [...box.querySelectorAll(".msg.bot .bubble")].pop();
+    if (lastBot) {
+      if (thinking) lastBot.prepend(makeThinkNode(thinking));
+      if (aux.textContent && aux.style.display !== "none") {
+        const note = document.createElement("div");
+        note.className = "chat-aux";
+        note.textContent = aux.textContent;
+        lastBot.prepend(note);
+      }
+    }
     // 对话工具可能重跑了调度 → 拉新数据
     const pr = await API.get("/api/progress");
     if (!pr.running && pr.solved) {

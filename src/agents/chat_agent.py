@@ -20,6 +20,9 @@ from dataclasses import dataclass
 
 from src.utils.config import CONFIG, active_config, use_config
 from src.utils.logger import get_logger
+from src.utils.url_guard import normalize_llm_base_url
+# 模块本身零重依赖（langchain 在工厂函数里才导入），所以这里可以直接引
+from src.agents.llm_stream_compat import chat_model_class as _chat_model_class
 from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
 from src.agents.storage_optimization_agent import StorageOptimizationAgent, ScheduleResult
 from src.agents.demand_response_agent import DRSignal
@@ -322,20 +325,38 @@ class RuleBasedAgent:
     # 供 API 层透传的模式标识（"rule" | "llm"），避免调用方用 isinstance 猜
     mode = "rule"
 
-    def __init__(self, tools: SchedulingTools):
+    def __init__(self, tools: SchedulingTools, fallback_reason: str = ""):
         self.tools = tools
+        # 为什么不是 LLM 模式；由 create_agent 在降级时写入，界面直接展示。
+        self.fallback_reason = fallback_reason
 
     # 明确的"重跑"类动词、调参类动词、以及参数对象词表。
     # ⚠️ 调参类动词必须同时锚定「动作词 + 参数对象」，不能只靠单个汉字。
     #    历史问题：列表里含裸字 "调"，而「调度」「协调」都含 "调"，
     #    导致「今天的调度策略是什么？」误进调参分支（返回调参提示而非解释）。
-    #    只把 "调" 换成 "调一下" 也不够——「协调一下」同样含该子串。
+    #    只把 "调" 换成 "调一下" 也**不够**——「协调一下」照样含这个子串，
+    #    于是「帮我协调一下SOC上限」会真的去跑一次 MILP。动词判定因此改成带
+    #    前后负向断言的正则：前面不许是 协/强/空/声（协调/强调/空调/声调），
+    #    后面不许是 度/查（调度/调查）。
     RUN_VERBS = ("重跑", "重新跑", "再跑", "重算", "重新算", "再算")
-    ADJUST_VERBS = ("调整", "调一下", "调成", "调到", "改成", "设为")
+    ADJUST_VERB_RE = re.compile(
+        r"(?<![协强虚空声])调(?!度|查)|改(?:成|为|到)|设(?:为|成|置为)")
     PARAM_WORDS = ("soc", "功率", "上限", "下限", "热约束", "温度约束",
                    "需求响应", "dr", "kw", "千瓦", "参数")
     # 只判 "关" 会把「不参与需求响应」读成"要参与"。
     NEGATIONS = ("关", "去掉", "不用", "不参与", "取消", "禁用", "不要")
+
+    # ASCII 参数名要用词边界。裸子串匹配下 "dr" 命中 address/hidden/throughput，
+    # "soc" 命中 social，都会把一个纯提问变成一次带 enable_dr=True 的真实重跑。
+    # 中文没有词界，只有 ASCII 词需要这条规则。
+    @classmethod
+    def _has_word(cls, text: str, word: str) -> bool:
+        if not word.isascii():
+            return word in text
+        return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text) is not None
+
+    def _has_adjust_verb(self, text: str) -> bool:
+        return self.ADJUST_VERB_RE.search(text) is not None
 
     def _extract_params(self, text: str) -> Dict[str, Any]:
         """从指令里抽取 run_with_params 的参数；抽不到返回空字典。
@@ -362,7 +383,7 @@ class RuleBasedAgent:
             params["rated_power"] = int(power_m.group(1))
         if "热约束" in text or "温度约束" in text:
             params["include_thermal"] = not any(n in text for n in self.NEGATIONS)
-        if "需求响应" in text or "dr" in text:
+        if self._has_word(text, "需求响应") or self._has_word(text, "dr"):
             params["enable_dr"] = not any(n in text for n in self.NEGATIONS)
         return params
 
@@ -397,7 +418,8 @@ class RuleBasedAgent:
             return self.tools.get_thermal_info()
 
         # 需求响应
-        if any(k in text for k in ["dr", "需求响应", "削峰", "补贴", "响应"]):
+        if (self._has_word(text, "dr")
+                or any(k in text for k in ["需求响应", "削峰", "补贴", "响应"])):
             return self.tools.get_dr_info()
 
         # 解释某时段
@@ -413,8 +435,8 @@ class RuleBasedAgent:
 
         # 调参重跑：动作词与参数对象同时出现才执行（见类注释里的裸字 "调" 教训）
         if pending_run or (
-                any(k in text for k in self.ADJUST_VERBS)
-                and any(k in text for k in self.PARAM_WORDS)):
+                self._has_adjust_verb(text)
+                and any(self._has_word(text, k) for k in self.PARAM_WORDS)):
             params = self._extract_params(text)
             if params:
                 return self.tools.run_with_params(**params)
@@ -463,14 +485,47 @@ def chunk_text(chunk) -> str:
     return ""
 
 
+def _is_tool_chunk(chunk) -> bool:
+    """这条 chunk 是工具返回、不是模型在说话。
+
+    `stream_mode="messages"` 也会把 ToolMessage 的 content 整块产出。那是工具给模型
+    看的报表原文，直接当 delta 推给前端，用户第一眼会看到一大段"📊 能效报表…"并判定
+    "没有打字机效果"（实测：首块 0.57 s 整段吐出，模型自己的 47 个 token 挤在之后
+    约 170 ms 内到达）。工具结果仍然进最终 history，只是不作为流式增量。
+    """
+    return (getattr(chunk, "type", None) == "tool"
+            or type(chunk).__name__.startswith("ToolMessage"))
+
+
+def _llm_kwargs(api_key: str, base_url: str, model: str,
+                params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """组装对话模型的构造参数。单独成函数是为了能把"设置页的值有没有真的传下去"测出来。
+
+    ⚠️ 这里曾经硬编码 `temperature=0` 且从不带 max_tokens：调用方只传
+    key+base+model，设置页里改采样温度/最大长度对对话 Agent 完全无效。
+    `timeout`/`max_retries` 保留：LLM 卡死不能拖死对话主流程。
+    """
+    params = params or {}
+    kw: Dict[str, Any] = {"api_key": api_key, "model": model,
+                          "temperature": params.get("temperature", 0),
+                          "timeout": params.get("timeout", 60), "max_retries": 1}
+    if params.get("max_tokens"):
+        kw["max_tokens"] = int(params["max_tokens"])
+    if base_url:
+        # DeepSeek 文档同时给 `https://api.deepseek.com` 和 `.../v1` 两种写法，
+        # 而 SDK 是直接拼接 /chat/completions，不补 /v1 就是 404。
+        kw["base_url"] = normalize_llm_base_url(base_url)
+    return kw
+
+
 class LLMAgent:
     """基于LangChain的LLM Agent，支持工具调用"""
 
     # 供 API 层透传的模式标识（"rule" | "llm"）
     mode = "llm"
 
-    def __init__(self, tools: SchedulingTools, api_key: str, base_url: str = None, model: str = "gpt-4o-mini"):
-        from langchain_openai import ChatOpenAI
+    def __init__(self, tools: SchedulingTools, api_key: str, base_url: str = None,
+                 model: str = "gpt-4o-mini", params: Dict[str, Any] = None):
         from langchain_core.tools import tool
         # langchain 1.x 移除了 create_tool_calling_agent/AgentExecutor，
         # 迁移到 v1 新 API create_agent（LangGraph 内核）。
@@ -538,11 +593,7 @@ class LLMAgent:
                      explain_day, ask]
 
         # LLM（超时/重试：LLM 卡死不能拖死对话主流程）
-        llm_kwargs = {"api_key": api_key, "model": model, "temperature": 0,
-                      "timeout": 60, "max_retries": 1}
-        if base_url:
-            llm_kwargs["base_url"] = base_url
-        llm = ChatOpenAI(**llm_kwargs)
+        llm = _chat_model_class()(**_llm_kwargs(api_key, base_url, model, params))
 
         system_prompt = """你是一个工商业储能调度专家助手，基于一阶RC热模型和MILP优化的多智能体系统。
 
@@ -555,6 +606,12 @@ class LLMAgent:
 可用工具：查询报表、对比基准、解释某时段调度、查询温度、查询DR事件、调参重跑。
 
 【输出排版规范】（界面按 Markdown 渲染，请严格遵守，保证回答清晰易读）
+语言：
+- **一律使用中文回答**。禁止英文过场话——"I'll pull the schedule…"、"Let me check…"
+  这类先叙述自己动作的句子不要出现；要调用工具就直接调用，不要先把打算说的话输出一遍。
+  （实测缺陷：模型在工具调用前吐一句英文再给中文结论，英文那句进了正文也进了 history，
+  界面第一行就是英文，与整页中文语境冲突。）
+
 结构：
 - 先一句话给结论，再分点展开；常规回答控制在 400 字内，用户明确要求"详细"时才展开
 - 层级顺序固定为：结论 → 关键数据 → 依据说明 → 风险/建议（缺项则跳过，不要凑标题）
@@ -598,19 +655,29 @@ class LLMAgent:
             return f"LLM调用出错：{str(e)[:200]}\n你可以检查API Key是否正确，或切换到规则模式。"
 
     async def astream(self, user_input: str):
-        """流式对话：逐块产出模型文本增量（供 SSE 端点消费）。
+        """流式对话：产出 ("content"|"reasoning", 增量文本)，供 SSE 端点消费。
 
         create_agent 返回的是 LangGraph 内核的 CompiledStateGraph，
         astream(stream_mode="messages") 按 token 产出 (AIMessageChunk, metadata)；
-        工具调用/工具结果阶段 content 为空，由 chunk_text 过滤为空串后跳过。
+        工具阶段的 chunk 用 _is_tool_chunk 剔掉——工具结果不是模型的话，
+        整块推给前端会让人以为回答是瞬间出现的。
+
+        思维链走独立的 kind：它是模型"想的过程"，既不能混进最终正文（会污染
+        history 和 Markdown 渲染），也不能不显示（思考模型几十秒不出正文，
+        用户只能看到空气泡）。调用方必须按 kind 分流。
         """
         async for chunk, _meta in self.executor.astream(
             {"messages": [{"role": "user", "content": user_input}]},
             stream_mode="messages",
         ):
+            if _is_tool_chunk(chunk):
+                continue
+            reasoning = getattr(chunk, "additional_kwargs", {}).get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                yield "reasoning", reasoning
             text = chunk_text(chunk)
             if text:
-                yield text
+                yield "content", text
 
 
 # ========== Agent工厂 ==========
@@ -619,23 +686,37 @@ def create_agent(
     api_key: str = "",
     base_url: str = "",
     model: str = "gpt-4o-mini",
+    params: Optional[Dict[str, Any]] = None,
 ) -> object:
-    """创建Agent，有API Key用LLM模式，否则用规则模式"""
+    """创建Agent，有API Key用LLM模式，否则用规则模式。
+
+    回退规则模式时把原因挂在 `agent.fallback_reason` 上：光打日志等于没打——
+    用户在界面上看到的一直是"规则模式那种机械回复"，却没有任何地方告诉他是
+    没配 Key、还是依赖没装、还是初始化炸了。调用方（/api/chat、/api/chat/stream）
+    负责把它透传到响应里。
+    """
     # 把 LLM 配置同步到上下文，供解释层使用（工具解释与整日解释共用同一套凭据）
     ctx.llm_api_key = api_key or ""
-    ctx.llm_base_url = base_url or ""
+    ctx.llm_base_url = normalize_llm_base_url(base_url or "")
     ctx.llm_model = model or ""
     tools = SchedulingTools(ctx)
     if api_key:
         try:
-            return LLMAgent(tools, api_key, base_url or None, model)
+            return LLMAgent(tools, api_key, base_url or None, model, params=params)
         except ImportError as e:
             # 此前 except Exception 静默回退规则模式——langchain-openai 未装时
-            # 用户配好 Key 也永远出不了 LLM 回复，且无任何提示。现在至少留下可查的日志。
+            # 用户配好 Key 也永远出不了 LLM 回复，且无任何提示。
             log.warning("langchain-openai 未安装或导入失败（%s），对话回退规则模式。"
                         "修复：pip install langchain-openai", e)
-            return RuleBasedAgent(tools)
+            return RuleBasedAgent(tools, fallback_reason=(
+                f"LLM 依赖导入失败（{e}），已回退规则模式。修复：pip install langchain-openai"))
         except Exception as e:
             log.warning("LLMAgent 初始化失败（%s），对话回退规则模式", e)
-            return RuleBasedAgent(tools)
-    return RuleBasedAgent(tools)
+            return RuleBasedAgent(tools, fallback_reason=(
+                f"LLM 初始化失败（{type(e).__name__}: {str(e)[:160]}），已回退规则模式。"
+                "请检查模型名、Base URL 与 API Key"))
+    log.info("未配置 API Key，对话走规则模式：规则模式没有 token 流，"
+             "前端的「流式输出」开关此时不会生效（不是 bug，是没有可流的模型）")
+    return RuleBasedAgent(tools, fallback_reason=(
+        "未配置 API Key，当前为规则模式：不经过大模型，按关键词匹配回复，"
+        "「流式输出」开关此时不生效"))

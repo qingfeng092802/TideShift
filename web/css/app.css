@@ -720,6 +720,17 @@ input[type="range"]::-webkit-slider-thumb {
 .info-bar .il { font-size: 11px; color: var(--text-3); }
 .info-bar .iv { font-size: 12.5px; color: var(--text-2); font-weight: 500; margin-top: 2px; }
 
+/* ---------- 对话气泡内的附注 ---------- */
+/* 降级说明 / 求解等待提示：一行短文本，字号比正文小一档，避免抢正文 */
+.chat-aux { font-size: 12px; color: var(--text-2); margin-bottom: 8px; line-height: 1.6; }
+/* 思维链：模型原文，只以纯文本呈现（pre + 自动换行），默认折叠 */
+.chat-think { margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-card); font-size: 12px; }
+.chat-think > summary { padding: 8px 12px; cursor: pointer; user-select: none;
+  color: var(--text-2); font-weight: 600; }
+.chat-think > pre { margin: 0; padding: 8px 12px; white-space: pre-wrap; word-break: break-word;
+  border-top: 1px solid var(--border); color: var(--text-2); max-height: 320px; overflow-y: auto; }
+
 /* ---------- AI 解释 ---------- */
 .ai-expander { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); overflow: hidden; }
 .ai-expander > .head {
