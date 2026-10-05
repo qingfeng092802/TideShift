@@ -17,11 +17,11 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 
 ## In 30 seconds
 **What it solves**: peak-charge / valley-discharge storage demos are everywhere, but the assumptions that make their revenue look good — whether the battery overheats, how much life it burns, whether any energy is left to sell tomorrow — usually never enter the model. This project writes all three **into the MILP's constraints and objective**, uses multi-agent + LLM to explain the result, and measures with an evaluation suite whether the numbers in that explanation were invented.
-- **Optimization vs baseline**: daily net revenue 711.71 → **1427.90 CNY (+100.6%)**, annualized **521,000 CNY** (same caliber as the baseline, no DR subsidies);
+- **Optimization vs baseline**: daily net revenue 711.71 → **1427.90 CNY (+100.6%)**, annualized **521,000 CNY** (excluding DR subsidy; approximately **20,000 CNY/year** of this comes from extra peak-valley arbitrage enabled by DR-driven power-curve rewriting — the strictly same-scope comparison against the baseline is **+93.0%**);
 - **The cost of constraints, shown**: the thermal constraints give up 3.3% of revenue and bring peak temperature 57.23 → **46.92 ℃** (back inside the derating band, 8.1 ℃ below the shutdown threshold);
 - **Agent behaviour is measured**: offline rule mode, 32 cases → task success **0.969**, number fidelity **1.000**, fabricated-number catch rate **0.750**; with a real model (`deepseek-flash`) the same-denominator 32 cases drop to **0.938** — which two of the three losses are the grader's fault is written up in [`evals/`](evals/README.md);
 - **Tunes its own constraints and admits defeat honestly**: propose → evaluate on real MILP → re-verify at equal resolution; on this dataset it **did not beat the default constraints**, and the [report](docs/parameter-search-sample.md) says exactly that;
-- **Reproducible**: **277 tests** (244 fast + 33 slow), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
+- **Reproducible**: **333 tests** (294 fast + 39 slow; 328 at baseline HEAD `29ab809`, plus 5 new headline-reproduction tests added this round), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
 > Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, slightly behind the naive baseline's 3.01%**; DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
 
 ![End-to-end demo: solve progress → overview → battery thermal → chat explanation](docs/screenshots/tideshift-demo.gif)
@@ -38,8 +38,50 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 
 ---
 
+## A 5-Minute Path for Reviewers
+
+Go in this order and you will see the three things this project is actually about. It assumes the server is already running as described in [Quick start](#quick-start) (default `http://127.0.0.1:8800`).
+
+### ① Battery thermal management page — constraints that really bind
+
+Temperature curve against revenue. The thermal constraints give up about **3.3%** of revenue and bring the peak from 57.23 ℃ down to **46.92 ℃**. The **45 ℃ line is a per-timestep hard constraint inside the MILP**, not an acceptance check applied after the fact:
+
+- the first-order RC temperature recursion and the quadratic heat term both live inside the optimization model;
+- the quadratic heat term is handled by an SOS2 **chordal (piecewise-linear) approximation**; for a convex function the chord always sits above the curve, so the error runs in the conservative direction (heat is slightly overestimated → the temperature constraint gets tighter, never looser);
+- the posterior (post-solve) simulation only double-checks the result; it takes no part in the decision.
+
+> ℹ️ **Why the page curve peaks above 45 ℃**: the MILP bounds the temperature **at every timestep** to ≤ 45 ℃, whereas the reported figure is the **all-day peak** of the posterior RC simulation driven by the final power profile, and thermal inertia puts it slightly higher (46.92 ℃ on 2024-07-30, 47.08 ℃ on the default dispatch day 2024-07-15). The two measure different things — reading 45 ℃ as "the curve on screen must never cross it" is a misreading.
+
+> ⚠️ **Scope note**: the page defaults to dispatch day **2024-07-15**, whose figures are arbitrage 1816.27 / peak **47.08 ℃** / DR subsidy 172.83 / net revenue incl. DR 1567.82 — not the same day as the 2024-07-30 main table (see the default-dispatch-day section of [`docs/experiments.md`](docs/experiments.md)). The **identical arbitrage figure on both days** is no coincidence: dispatch in this model is price-driven and every day in July shares the same price curve, so only the DR subsidy and the temperature move.
+
+### ② Forty-five seconds in a terminal — the numbers are not copied
+
+Open the reproduction-script section of [`docs/experiments.md`](docs/experiments.md) and run it once (roughly 40–60 s, one real MILP solve included). The four acceptance values (dispatch day 2024-07-30):
+
+- arbitrage **1816.27 CNY**
+- degradation **388.37 CNY**
+- peak temperature **46.92 ℃**
+- equivalent cycles **1.4564**
+
+In that document they are literally written as `assert` statements, with tolerances 0.5 / 0.5 / 0.2 / 0.01, so anyone who clones the repository can recompute them to two decimal places.
+
+Until this round those five numbers had **zero occurrences in `tests/`** (only a comment in `test_end_to_end.py` mentioned 46.92), meaning a changed physical constant, thermal integration step or SOC band weight could silently make them wrong while the suite stayed green. They are now pinned by **`tests/test_experiments_repro.py`** (`slow`, same tolerances; net revenue is guarded through the identity `arbitrage + DR subsidy − degradation` instead of a duplicated absolute value).
+
+> ⚠️ Two honest caveats: `slow` tests **do not run in PR CI** — they run nightly and on manual trigger, so "PR is green" is not evidence that these five numbers were just verified; look for the record of that full run. And the **whole round takes 40–60 s depending on the day's problem size** — 45 s is a typical value, not an upper bound.
+
+### ③ The probe table — where the anti-hallucination guard fails
+
+Open the anti-hallucination-probe section of [`evals/reports/rule-latest.md`](evals/reports/rule-latest.md): catch rate **0.750**, where the denominator is the **number of planted numbers (4)**, not the number of probes (6). The one that slipped through is the "0.9×" planted by `gp-unit-boundary`, which lands inside the `check_grounding(rtol=0.01, atol=0.05)` tolerance band. The root cause and both blind spots are written up in the guard-measurement section of [`docs/experiments.md`](docs/experiments.md), and `tests/test_evals_run.py::test_planted_numbers_are_not_accidentally_grounded` keeps the planted values from colliding with one another.
+
+> Saying exactly where your guard fails is more credible than claiming zero hallucination.
+
+> **Three conventions while demoing**
+> 1. **Do not switch the orchestration-engine dropdown**: the plain-Python engine's explanation-layer fields are not aligned yet (`terminal_soc` and friends read as 0) — see [Known limitations and roadmap](#known-limitations-and-roadmap).
+> 2. **Do not open the Demand Response page unprompted**: two of its three feasibility checks are currently static text; see the same section. If a reviewer opens it, say plainly that the backend computes all three checks and the frontend does not consume them all yet.
+> 3. **The page defaults to dispatch day 2024-07-15 while this README's results table uses 2024-07-30**: small differences are expected (peak 47.08 vs 46.92 ℃, DR subsidy 172.83 vs 159.84 CNY, net revenue incl. DR 1567.82 vs 1587.74 CNY) — when asked, answer "different days, same scope". Arbitrage is **1816.27 on both days** because dispatch is price-driven.
+
 ## Contents
-[In 30 seconds](#in-30-seconds) · [Overview](#overview) · [Screenshots](#screenshots) · [Core features](#core-features) · [Architecture](#architecture) · [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start) · [Usage](#usage) · [Configuration](#configuration) · [Project layout](#project-layout) · [Technical details](#technical-details) · [Measured results](#measured-results) · [Testing](#testing) · [FAQ](#faq) · [Contributing](#contributing) · [Known limitations and roadmap](#known-limitations-and-roadmap) · [License](#license)
+[In 30 seconds](#in-30-seconds) · [A 5-Minute Path for Reviewers](#a-5-minute-path-for-reviewers) · [Overview](#overview) · [Screenshots](#screenshots) · [Core features](#core-features) · [Architecture](#architecture) · [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start) · [Usage](#usage) · [Configuration](#configuration) · [Project layout](#project-layout) · [Technical details](#technical-details) · [Measured results](#measured-results) · [Testing](#testing) · [FAQ](#faq) · [Contributing](#contributing) · [Technology Choices](#technology-choices) · [Known limitations and roadmap](#known-limitations-and-roadmap) · [License](#license)
 
 ## Overview
 **TideShift 汐储** is a dispatch optimizer for a 1MW/2MWh commercial-and-industrial LFP battery running on Guangdong's peak-valley industrial/commercial tariff. Decisions are made on a 96-point (15-minute) grid, and one run does three things: **forecast next-day load → solve the optimal charge/discharge plan → evaluate and respond to grid demand-response (DR) invitations**, finishing with an explainable account of why.
@@ -80,7 +122,7 @@ Clicking "开始求解" ("Start solving") runs the full chain — load forecast 
 |------|------|
 | 🌡️ **First-order RC thermal model + quadratic heating** | Lumped-parameter heat transfer models battery temperature rise; the quadratic heating term uses an SOS2 chord upper approximation, so the temperature-ceiling constraint stays conservative |
 | 🔋 **SOC-band weighted degradation** | Deep cycling costs 2~3× shallow cycling, written **into the objective** as big-M piecewise terms rather than a constant approximation |
-| 🤖 **Three agents + two orchestration engines** | Load-forecast / storage-optimization / demand-response agents, orchestrated by either a LangGraph directed graph or plain Python; both produce identical output |
+| 🤖 **Three agents + two orchestration engines** | Load-forecast / storage-optimization / demand-response agents, orchestrated by either a LangGraph directed graph or plain Python; the five economic quantities (arbitrage / degradation / net revenue / charge energy / discharge energy) match to the cent, while the explanation layer and SOC post-processing exist only in the LangGraph engine |
 | 📈 **Physics-corrected load forecast** | XGBoost plus a heat-transfer temperature correction, with a **naive baseline always computed alongside** (cases where the baseline wins are reported as wins for the baseline) |
 | 📡 **Triple DR validation** | Thermal safety + energy-usage floor + revenue check; DR is accepted only when net revenue is positive |
 | 🧠 **LLM decision-explanation layer** | Dispatch results are compressed into a fact digest before the LLM phrases them; output numbers are back-checked and invented ones flagged; missing key / offline / errors all degrade to rule templates automatically |
@@ -118,7 +160,7 @@ init → load_forecast → storage_optimization → dr_handler ⇄ finalize → 
 ```
 **2. Plain-Python orchestration (lightweight)** — `src/agents/coordinator_agent.py`. A linear flow with a `for` loop over DR events and no LangGraph dependency.
 
-Both engines produce **identical output**, asserted by `tests/test_langgraph.py`, so you pick by deployment environment without worrying about drift.
+Both engines produce the same **five economic scalars** (arbitrage / degradation / net revenue / charge energy / discharge energy), guarded by `tests/test_langgraph.py` — marked `slow`, so PR CI skips it and the nightly and manual runs cover it. The explanation layer and the SOC post-processing (`terminal_soc`, energy-balance residual, SOC violation steps) exist **only in the LangGraph engine**: see [Known limitations and roadmap](#known-limitations-and-roadmap). Pick by deployment environment, but do not read this as "the two engines produce identical output".
 
 ### Constraint-parameter search agent (the loop where the model drives control flow)
 `src/agents/parameter_search_agent.py`. The main pipeline is a **fixed directed graph**: control flow is hard-coded in the orchestration and the LLM only writes prose at the end — that is a workflow, not an agent. This module adds a loop where the model genuinely decides:
@@ -547,7 +589,7 @@ coverage run -m pytest -o addopts= && coverage report
 ```
 > ⚠️ **PowerShell users**: `pytest -m ""` does not work there — the shell drops the empty argument and pytest reports `argument -m: expected one argument`. Clear the `pytest.ini` default `-m "not slow"` with `-o addopts=` as above, or use the equivalent `pytest -m "slow or not slow" -q`. Under Bash / zsh, `pytest -m ""` is fine.
 
-Test scale is **277 items** (244 fast plus 33 marked `slow`, of which 9 are `eval`-marked agent-behaviour evaluations), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 9 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 268 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
+Test scale is **333 items** (294 fast plus 39 marked `slow`, of which 9 are `eval`-marked agent-behaviour evaluations; the baseline HEAD `29ab809` gives 328, and 5 come from `tests/test_experiments_repro.py` added this round), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 9 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 324 that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
 
 **Release gate = full `pytest` in CI.** The workflow has `workflow_dispatch`, so the full suite (including `slow`) can be triggered from the Actions page as the standard pre-release regression; if your machine cannot run pytest inside a restricted sandbox, use that entry point rather than substituting a weaker verification. **This gate was actually exercised for v1.0.0**: 247 tests green, the `pytest -m ""` step took 846 s (Run 35446508669, `ubuntu-latest` / Python 3.13). That figure is the measured step time under the layout in effect then, where pytest ran twice - once bare and once under coverage; the duplicate pass has since been merged away, so it is a measurement of that run, not a prediction for the current one. **1.1.0 cleared the same gate**: Run 35496788350, `277 passed in 796.12s` (job wall 836 s, coverage 82%), with the paired `fast-tests` reporting `244 passed, 33 deselected in 50.45 s` (Run 35478561322). One thing to record honestly: this gate **used to print no count and no timing at all**, because the command's `-q` stacks on the `-q` already in `pytest.ini` and `-qq` swallows the summary line - so the first run (Run 35486570178) had its 277 confirmed by counting progress dots (72x3 + 61) rather than reading a summary. The duplicate `-q` is now removed and re-verified, which is where the numbers above come from; quote 796 s (tests only) rather than 836 s (the job also covers checkout and install). If `tests/test_server_api.py` fails on its very first case with `PermissionError: [WinError 10013]`, that is the sandbox blocking the loopback `socketpair()` that `TestClient` depends on — an environment constraint, not a project defect; the test is whether the file passes on its own (`pytest tests/test_server_api.py -q`), and CI on `ubuntu-latest` is unaffected.
 
@@ -613,13 +655,38 @@ test(thermal): assert the thermal model's last-point boundary
 ```
 **Conventions**: the single source of the version number is `__version__` in `src/__init__.py`, bumped together with `CHANGELOG.md` per [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) and semantic versioning · **if you touch css/js under `web/` you must bump the `?v=` cache key in `web/index.html`** (by convention equal to `__version__`, changed at release time) — this is not pedantry: we actually hit "the new page is committed and `git status` is clean, yet returning users do not even have that sidebar entry", because the browser was still running the old `pages.js`. The SRI-pinned `vendor/echarts.min.js` needs a `?v=` too: **SRI validates content, not the URL**, so upgrading that file without moving the cache key gives returning visitors old bytes against a new hash and an immediate "echarts is not defined". `tests/test_web_assets.py` now guards all three (a cache key exists, it equals the version, referenced files exist) · physical quantities always carry units and caliber, with revenue/loss computations stating formula and dimensions in comments · no undeclared dependencies (new ones go into `requirements.txt`, plus `requirements-dev.txt` / `requirements.lock` where relevant, all three kept consistent) · credentials and runtime state never get committed (`config/`, `.solve_cache/`, `.env`, `logs/`; if a leak is found, move to environment variables immediately) · tests use real assertions, never call-without-assert placeholders, and numeric assertions give a tolerance and its basis · any change to the optimization model must state its effect on the objective and add or update the matching test.
 
+## Technology Choices
+
+The "why not X" questions that come up in review, answered in one place.
+
+**Why HiGHS rather than CBC?**
+HiGHS is preferred whenever `highspy` is available (PuLP's built-in CBC is about 4~5x slower on this model — see [FAQ](#faq)). When `highspy` is missing, `pulp.HiGHS` raises an exception → the solver **falls back to CBC and logs a WARNING**, so a missing solver package never makes the project unrunnable.
+
+**Why an SOS2 piecewise-linear formulation instead of a direct quadratic program?**
+Heat generation is `I²R`, i.e. quadratic in power, while an MILP only accepts linear constraints — so the quadratic term goes in through an SOS2 **chordal (piecewise-linear) approximation**. A chord rather than a tangent is deliberate: **for a convex function the chord always sits above the curve**, so the error is conservative (heat is slightly overestimated, the temperature constraint slightly tighter). Across 6 segments the largest absolute overestimate is **364.58 W**, which corresponds to about **0.365 K** at steady state. The guard test `tests/test_storage_agent.py::test_heat_generation_is_quadratic_not_linear` compares the chord against the true value at the midpoint of every segment — it is not a test named after an assertion it never makes.
+
+**Why not Gurobi / CPLEX?**
+PuLP is free and runs straight after a clone, and anyone can recompute the figures in [Measured results](#measured-results) in about 45 seconds — that reproducibility claim is part of what this project is selling, and a commercial licence would void it. On top of that, HiGHS already reaches an Optimal solution at 1% gap in roughly 42 s on this model: **switching solvers would buy a licence, not time**.
+
+**Why a hand-written thermal model instead of PyBaMM?**
+What the MILP needs is a **linearizable temperature recursion**, and the accuracy required stops at the **lumped-parameter level** (τ ≈ 4.17 h). An electrochemical detail model buys accuracy rather than constraint usability — and it is not linearizable, so the thermal constraint could not sit inside the optimization model at all and would survive only as an after-the-fact check. This project's choice is: **the thermal constraint is a hard constraint inside the MILP, and the posterior (post-solve) simulation only verifies**.
+
+**Can it scale out horizontally with multiple workers?**
+**No — and that is a design choice, not an oversight.** The session bucket (`_SESSIONS` in `backend/server.py`), the login-failure counters and lockout window (`_LOGIN_FAILS` / `_LOGIN_LOCKED_UNTIL`) and the solve progress (`AppState.progress`) are **all in-process state**, and the app starts as a single process via `uvicorn.run(app, ...)`. With multiple workers:
+
+- a user's second request can land on another worker → the session is lost (it shows up as random logouts);
+- rate limiting only counts the failures that landed on the same worker → the "lock after 5 attempts" policy gets diluted by the worker count.
+
+To scale out, externalise those three to Redis / a shared cache first. The current positioning is single-machine / intranet (see the next section, [Known limitations and roadmap](#known-limitations-and-roadmap)); this is a deliberate scope choice.
+
 ## Known limitations and roadmap
 **Modelling and algorithms**
 - **DR settles on "discharged energy × subsidy" with no CBL baseline modelled**: real settlement is the reduction relative to baseline load, so the current caliber double-counts revenue.
-- **Demand charges (capacity tariff) not modelled**: an important part of C&I storage revenue, so its absence understates earnings.
+- **Demand charges (capacity / maximum-demand tariff) are modelled, but only at monthly granularity**: `src/utils/demand_charge.py` implements the segmented billing rules of document No. 1583, all four billing modes and whole-month demand-peak tracking, and the dashboard already shows them; they are **not wired into the day-granularity MILP objective** (the daily optimum is not the monthly optimum), and on the MILP side only an optional "daily grid-import ceiling" hard constraint is available. See [`docs/experiments.md`](docs/experiments.md) §6;
 - **The degradation charged inside the objective is not the number the report settles on**: the model prices band throughput through the big-M allocation, the report recomputes it from the realised SOC trajectory. Measured on 2024-07-30 (96 points, thermal on, banded) the provably optimal solution differs by **37.75 CNY** for one and the same curve (382.54 in the objective vs 420.29 settled, 9.0% of the settled figure) - and that is why taking `mip_gap` from 1% to 0% costs 7.8x the solve time and settles **2.31% worse** (see [Measured results](#measured-results)). The fix is to linearise the post-hoc recompute into the model, or to have the report reuse the model's allocation;
 - **Load-forecast XGBoost cannot beat the naive baseline**: an artefact of too-regular synthetic data. Planned — direct multi-step forecasting (no feeding predictions back), at least one external validation on a public dataset (e.g. NREL ComStock), and the physical correction as an ablation switch rather than on by default.
 - **Extreme-condition checks are thin**: add HVAC failure (larger `R_th`), extreme summer heat days (ambient 35~40 ℃), and similar scenarios.
+- **The post-solve temperature peak may slightly exceed the 45 C hard limit**: inside the MILP, 45 ℃ is a **per-timestep** hard constraint (no timestep may exceed it), but thermal inertia makes the all-day peak of the posterior simulation slightly higher (measured 46.92 / 47.08 ℃). They measure different things — this is not a contradiction;
 
 **AI capability**
 - **Explanation is single-day and post-hoc only**: no MPC rolling re-explanation; the parameter-search agent explores efficiency constraints only (SOC window, power ceiling), and safety policy items are excluded by design.
@@ -634,7 +701,7 @@ test(thermal): assert the thermal model's last-point boundary
 - **The screenshots and the demo GIF predate the tariff revision**: the tariff cards and net revenue visible in them are superseded by the numbers in [Measured results](#measured-results); re-recording is pending.
 
 **Engineering**
-- **Single-machine / intranet positioning**: public deployment means supplying your own reverse proxy, HTTPS, and password plus directory-permission hardening.
+- **Single-machine / intranet positioning**: public deployment means supplying your own reverse proxy, HTTPS, and password plus directory-permission hardening (the reason being that sessions, rate-limit counters and solve progress are all in-process state, so horizontal scaling requires externalising them first — see the last question of [Technology Choices](#technology-choices)).
 - **No multi-user or permission tiers**: one administrator account today.
 
 ## License
