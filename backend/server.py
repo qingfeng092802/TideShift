@@ -1860,11 +1860,27 @@ _STATIC_ALLOWED_EXT = {".html", ".css", ".js", ".map", ".svg", ".png", ".jpg", "
 
 
 class _GuardedStaticFiles(StaticFiles):
+    """非白名单扩展名 403 + HTML 入口协商缓存。
+
+    为什么 HTML 要 no-cache：index.html 里挂着 ?v=<version> 缓存位
+    （tests/test_web_assets.py 钉住它必须等于 __version__），而 StaticFiles 默认
+    只发 ETag/Last-Modified、不发 Cache-Control ⇒ 浏览器走启发式缓存。后果是
+    "版本号进了，用户拿到的还是旧的 index.html，于是继续请求旧的 ?v"，整条缓存位
+    机制形同不存在。真实踩过两次：新增页面后侧栏导航项不出现、改布局后页面没变，
+    两次都表现为"代码对了但用户看不见"。
+    no-cache 不是 no-store：文件仍留在磁盘缓存，只是每次带 If-None-Match 问一次，
+    未变更时 304 只回头部（starlette 0.52 的 staticfiles 已实现该分支）。
+    css/js 不给 no-cache —— 它们靠 ?v 换 URL 失效，正是要被缓存的那部分。
+    """
+
     async def get_response(self, path: str, scope):
         ext = os.path.splitext(path)[1].lower()
         if ext and ext not in _STATIC_ALLOWED_EXT:
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
-        return await super().get_response(path, scope)
+        response = await super().get_response(path, scope)
+        if "text/html" in response.headers.get("content-type", ""):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 app.mount("/", _GuardedStaticFiles(directory=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web"), html=True), name="web")

@@ -59,3 +59,46 @@ def test_cache_buster_matches_version():
 def test_referenced_asset_exists(path, version):
     """引用了不存在的文件时页面只会静默半瘫，这里提前让它红。"""
     assert (WEB / path).exists(), f"index.html 引用了缺失文件：{path}"
+
+
+# ============================================================================
+# 送达这一层：上面三条只保证仓库里的 ?v 是对的，但 ?v 能不能到浏览器，
+# 取决于 index.html 本身每次是不是重新验证。StaticFiles 默认只发
+# ETag/Last-Modified 而不发 Cache-Control ⇒ 浏览器走启发式缓存 ⇒
+# "版本号进了、用户拿到的还是旧 index.html、于是继续请求旧 ?v"。
+# 真实踩过两次（新增页面后侧栏没有该项 / 改了布局页面没变），
+# 两次的共同症状都是"代码对了但用户看不见"，而 git status 一切正常。
+# ============================================================================
+@pytest.fixture(scope="module")
+def client():
+    from fastapi.testclient import TestClient
+    from backend import server
+    return TestClient(server.app)
+
+
+def test_html_entry_is_revalidated(client):
+    """入口文档必须 no-cache，否则缓存位机制整体失效。"""
+    for url in ("/", "/index.html"):
+        r = client.get(url)
+        assert r.status_code == 200, url
+        assert r.headers.get("cache-control") == "no-cache", \
+            f"{url} 的 Cache-Control 是 {r.headers.get('cache-control')!r}；" \
+            f"入口文档不重新验证的话，?v 升了也送不出去"
+        assert 'href="css/app.css?v=' in r.text, "拿到的不是仓库里那份 index.html"
+
+
+def test_versioned_assets_stay_cacheable(client):
+    """css/js 不给 no-cache：它们靠 ?v 换 URL 失效，正是要留在缓存里的那部分。"""
+    r = client.get(f"/css/app.css?v={__version__}")
+    assert r.status_code == 200
+    assert "no-cache" not in (r.headers.get("cache-control") or ""), \
+        "给带缓存位的资源加 no-cache 等于让它每次都回源，?v 就没意义了"
+
+
+def test_html_revalidate_costs_only_a_header_roundtrip(client):
+    """no-cache 的代价是 304 而不是重传正文；顺带钉住 ETag 存在。"""
+    etag = client.get("/").headers.get("etag")
+    assert etag, "静态文件没有 ETag ⇒ no-cache 会每次全量重传入口文档"
+    again = client.get("/", headers={"if-none-match": etag})
+    assert again.status_code == 304
+    assert again.content == b""

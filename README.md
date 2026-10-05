@@ -7,7 +7,7 @@
 把电池热损耗、温升约束与寿命衰减折算进 MILP 优化目标 —— 输出的不是好看的曲线，而是能落地的调度策略。
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.2.2-orange)
+![Version](https://img.shields.io/badge/version-1.2.3-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
@@ -28,7 +28,9 @@
   接上真实模型（`deepseek-flash`）后**同分母 32 例降到 0.938**，降在哪、哪两条是判分口径的锅，全写在 [`evals/`](evals/README.md)；
 - **会自己调参，也如实认输**：提案 → 真实 MILP 评价 → 同分辨率复验的闭环；这组数据上**没跑赢默认约束**，
   [报告](docs/parameter-search-sample.md)里就写"未跑赢"；
-- **可复现**：**333 项测试**（294 快测 + 39 slow；基线 HEAD `29ab809` 为 328 项，另有本轮新增的 headline 复现测试 5 项）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
+- **可复现**：**测试计数写成可复算的关系式** —— `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`
+  读快测、`-m "slow"` 读 slow 档，两档相加即总数（截至 2026-10-05 实测 **297 + 39 = 336**；基线 HEAD `29ab809`
+  为 328 项，增量 = headline 复现测试 5 项 + 缓存位/送达判据 3 项）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
 
 > 三件不回避的事：内置 `data/` 的**负荷与气温是合成的**（电价时段划分有 331 号文出处，基准价仍是示例值，逐条对应见 [`data/README.md`](data/README.md)）；负荷预测 XGBoost **3.12% MAPE 略输朴素基线的 3.01%**；
 > 需求响应按"放电量 × 补贴"结算，**尚未建模 CBL 基线**。全部列在[已知局限与路线图](#已知局限与路线图)。
@@ -805,14 +807,16 @@ coverage run -m pytest -o addopts= && coverage report
 > pytest 报 `argument -m: expected one argument`）。请用上面的 `-o addopts=` 清空 `pytest.ini` 默认的
 > `-m "not slow"`，或使用等价表达式 `pytest -m "slow or not slow" -q`。Bash / zsh 下 `pytest -m ""` 正常。
 
-测试规模 **333 项**（快测 294 项 + `slow` 39 项，其中 9 项为 `eval` 标记的 agent 行为评测；
-基线 HEAD `29ab809` 是 328 项，其中 5 项来自本轮新增的 `tests/test_experiments_repro.py`），
+测试规模按两档分别复算，不写死总数：`pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`
+读快测，`pytest -o addopts= -q -m "slow" --collect-only | grep -c ::` 读 slow 档，两档之和即总数
+（截至 2026-10-05 实测 **快测 297 + slow 39 = 336**，其中 9 项为 `eval` 标记的 agent 行为评测；
+基线 HEAD `29ab809` 是 328 项，增量 = 本轮新增的 `tests/test_experiments_repro.py` 5 项 + `tests/test_web_assets.py` 的缓存位/送达判据 3 项），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
 `eval` 那 9 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 324 项量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+与其余 327 项（336 − 9，同样按上面的式子复算）量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。**v1.0.0 这道门槛已实际跑通**：247 项全绿，`pytest -m ""` 单步 846 s（Run 35446508669，`ubuntu-latest` / Python 3.13）。注意这个数是**当时布局**（pytest 与 coverage 各跑一遍）下的单步耗时，重复的那一遍后来已合并掉，所以它是那次运行的实测，不是当前布局的预测值。**1.1.0 也跑通了**：Run 35496788350，`277 passed in 796.12 s`（job 整跑 836 s，覆盖率 82%），配套的 `fast-tests` 是 `244 passed, 33 deselected in 50.45 s`（Run 35478561322）。有一处要如实记下：这道门槛**原先不打印**自己的计数与计时——命令行的 `-q` 叠上 `pytest.ini` 里的 `-q` 成了 `-qq`，汇总行被一起吞掉，所以第一次跑（Run 35486570178）那个 277 是数进度圆点（72×3 + 61）确认的。重复的 `-q` 已从工作流去掉并复跑验证，上面的数字现在是 pytest 自报的；引用时用 796 s（纯测试）而不是 836 s（job 另含 checkout 与装依赖）。
 

@@ -3,6 +3,34 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（SemVer）。
 唯一版本号来源：`src/__init__.py` 的 `__version__`。
 
+## [1.2.3] - 2026-10-05
+
+HTML 入口改走协商缓存。**这一笔没有前端呈现层改动**，动的是 `backend/server.py` 与测试；
+单独占一个缓存位是因为它改变了"`?v` 能不能送达浏览器"这件事本身。
+
+### 为什么只升 `?v` 治不了上一节那个病
+
+`index.html` 自己也没有 `Cache-Control`，走的是启发式缓存。后果是旧 HTML 会继续引用 `?v=1.2.1`，
+**"把缓存位升到 1.2.2"这一步本身就送不出去** —— 用户必须硬刷新一次才能看到 1.2.2 的东西。
+1.2.1、1.2.2 两节各写了一遍"要硬刷新"，那是在给这个缺陷打补丁式说明，不是解法。
+
+### 变更（Changed）
+
+- `_GuardedStaticFiles.get_response()` 给 HTML 加 `Cache-Control: no-cache`：入口文档每次带
+  `If-None-Match` 问一次 ⇒ 未变更时 304（只回头部，不重传正文），变更后立刻拿到新 `?v`。
+  `no-cache` 不等于 `no-store`，文件仍留在磁盘缓存里。
+- css/js **不给** `no-cache`：它们靠 `?v` 换 URL 失效，正是要被缓存的那部分；
+  给它们加就等于每次回源，缓存位失去意义。这条不对称是刻意的，已钉成用例。
+
+### 测试（Tests）
+
+- `tests/test_web_assets.py` +3 条 fast 判据（9 → 12 passed，1.19s）：入口 no-cache、
+  带缓存位的资源仍可缓存、`If-None-Match` 回 304 且正文为空。
+  第三条同时钉住"ETag 必须存在" —— 没有 ETag 的话 `no-cache` 的代价会从回头部变成全量重传。
+- 全量 297 collected / 0 failed / 0 error / 0 skipped（`--junitxml` 读数，`-q` 的汇总行在本环境被吞）。
+  快测数从 294 涨到 297 就是这 +3，`README.md` / `README.en.md` 里那两处计数同步改成
+  **复算口径**（写关系式不写死数）：`pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::` 复算。
+
 ## [1.2.2] - 2026-10-05
 
 设置页"一屏一张卡"：两屏里并排的 3~5 张 `.panel-card` 合成一张，分组改由分隔线与小节标题承担。
