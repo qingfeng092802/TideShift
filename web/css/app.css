@@ -934,6 +934,47 @@ dialog.ui-confirm { width: min(440px, 90vw); }
 @media (max-width: 1180px) {
   .sch-grid { grid-template-columns: 1fr; }
 }
+/* ---------- 设置页：一屏一张卡 ----------
+   原来一屏里并排 3~5 张 .panel-card：卡与卡之间是两条相邻边框、底部参差，看着碎。
+   这里让网格容器自己当那张卡——列之间一条竖分隔线，列内小节之间一条横线，
+   分组交给小节标题（.panel-title）。子导航、DOM 结构、JS 绑定都不动，纯 CSS。
+   模型设置三列都是 .mp-col（第一列原本带 .panel-card，合并后那圈边框多余，已改裸 .mp-col），
+   调度参数三列直接是 .panel-card，所以"列"的样式要同时命中这两种。
+   选择器一律带 .set-panel 前缀把特异性抬到 (0,3,0)，
+   压过下方 html.compact .panel-card{padding:…} 的 (0,2,0)。 */
+.set-panel .mp-grid3, .set-panel .sch-grid {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); gap: 0; align-items: stretch;
+}
+/* compact 模式那条 html.compact .mp-grid3{gap:12px} 特异性更高，会绕过分隔线居中，这里按回去 */
+html.compact .set-panel .mp-grid3, html.compact .set-panel .sch-grid { gap: 0; }
+/* 列：模型设置三列都是 .mp-col，调度参数三列都是 .panel-card */
+.set-panel .mp-grid3 > .mp-col, .set-panel .sch-grid > .panel-card {
+  background: none; border: none; border-radius: 0;
+  padding: 16px 18px; min-width: 0;
+}
+.set-panel .mp-grid3 > .mp-col { gap: 0; }
+/* 列内小节：去掉卡外观，分组交给横线与小节标题 */
+.set-panel .mp-col > .panel-card { background: none; border: none; border-radius: 0; padding: 0; }
+/* 分隔线选择器一律比上面的重置多一级类，否则 border:none 会把它吃掉 */
+.set-panel .mp-grid3 > .mp-col + .mp-col,
+.set-panel .sch-grid > .panel-card + .panel-card { border-left: 1px solid var(--border); }
+.set-panel .mp-col > .panel-card + .panel-card {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+/* 危险操作自带红框，不再叠一条灰横线 */
+.set-panel .mp-col > .mp-danger { margin-top: 14px; }
+/* 收成单列时竖线换成横线，否则分隔线跑成一条贴边的竖杠 */
+@media (max-width: 1180px) {
+  .set-panel .mp-grid3 > .mp-col + .mp-col,
+  .set-panel .sch-grid > .panel-card + .panel-card {
+    border-left: none; border-top: 1px solid var(--border);
+  }
+}
+/* 外观主题屏故意不合并：上面的重置规则都以 .mp-grid3 / .sch-grid 为作用域，
+   .ap-wrap（竖排两张卡、max-width:900px）不命中，因此它沿用 .panel-card 原样。
+   那张屏的两块内容语义差得远（主题预览卡选择器 vs 四行开关），合并后一条横线
+   切不出分组，反而把 900px 的正文撑成一条长条。 */
 /* 滑杆 2 列网格（最低SOC+最高SOC 一行，额定功率第二行） */
 .bat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
 /* 三个滑块配两列 ⇒ 第三行只有「额定功率」，右半格空着、滑块还被裁成半宽。

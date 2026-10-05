@@ -794,8 +794,8 @@ const fmtPath = (f) => { const m = /\(([^)]+)\)/.exec(String(f || "")); return m
           </div>
 
           <div class="mp-grid3">
-            <div class="panel-card">
-              <div class="panel-title">编辑供应商<span class="chev">▼</span></div>
+            <div class="mp-col">
+              <div class="panel-title">编辑供应商<span class="chev">${ico("chevron")}</span></div>
               <div class="field"><label>名称</label><input type="text" id="mp-name" value="${esc(edit.name || "")}" placeholder="如：智谱 GLM"></div>
               <div class="field" style="margin-top:10px;"><label>Base URL</label><input type="text" id="mp-base" value="${esc(edit.base_url || "")}" placeholder="https://api.example.com/v1"></div>
               <div class="mp-duo" style="margin-top:10px;">
