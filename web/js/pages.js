@@ -18,8 +18,8 @@ function opBarHTML(withExport) {
   return `<div class="op-bar">
     <label>调度日期</label>
     <select id="op-date">${dates.map((d) => `<option ${d === sel ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
-    <button class="btn btn-primary" id="op-run">🚀 运行调度</button>
-    ${withExport ? `<span class="op-spacer"></span><a class="btn" id="op-export" download>📥 导出调度结果CSV</a>` : `<span class="op-spacer"></span>`}
+    <button class="btn btn-primary" id="op-run">${ico("play")} 运行调度</button>
+    ${withExport ? `<span class="op-spacer"></span><a class="btn" id="op-export" download>${ico("download")} 导出调度结果CSV</a>` : `<span class="op-spacer"></span>`}
   </div>`;
 }
 /* 页内 subtab 切换逻辑收敛为单一辅助函数——热管理页与需求响应页此前各自复制了一份相同实现 */
@@ -51,15 +51,15 @@ function bindOpBar(root, withExport) {  $("#op-date", root).addEventListener("ch
 }
 
 /* ---------- 共享：AI 决策解释（总览页） ---------- */
-const AI_SOURCE_LABEL = { llm: "🤖 LLM 生成", rule: "📋 规则模板", none: "⚪ 未生成" };
+const AI_SOURCE_LABEL = { llm: `${ico("bot")} LLM 生成`, rule: `${ico("clipboard")} 规则模板`, none: `${ico("circle")} 未生成` };
 function aiSourceLabel(source) {
   return AI_SOURCE_LABEL[source] || source || "—";
 }
 /* head 内部内容单独成函数：刷新解释时只需替换 innerHTML，
    保留 <button> 元素本身（其 click 监听器绑在元素上，替换 outerHTML 会丢失）。 */
 function aiExpanderHeadInner(source) {
-  return `🧠 AI 决策解释 · ${aiSourceLabel(source)}（点击展开查看）` +
-    `<span style="font-size:11px;color:var(--text-3);font-weight:400;">▼</span>`;
+  return `${ico("cpu")} AI 决策解释 · ${aiSourceLabel(source)}（点击展开查看）` +
+    `<span class="chev-inline">${ico("chevron")}</span>`;
 }
 /* 基本电费（容/需量电价）卡片。
    口径边界写死在这里：只报"当日调度峰值"与"整月负荷月峰"两个真实算得出的量，
@@ -75,9 +75,9 @@ function demandCardHTML(dm) {
   const over = dm.over_band_kw > 0;
   const extra = over ? dm.over_band_kw * dm.price_demand * 2 : 0;
   const verdict = over
-    ? `⚠️ 月峰已超 105% 阈值 <b>${dm.over_band_kw.toFixed(0)} kW</b>，超额部分按双倍计收，`
+    ? `${ico("warn")} 月峰已超 105% 阈值 <b>${dm.over_band_kw.toFixed(0)} kW</b>，超额部分按双倍计收，`
       + `每月因此多交 <b>${fmtMoney(extra)}</b> 元`
-    : `✅ 月峰距 105% 阈值还有 <b>${dm.headroom_kw.toFixed(0)} kW</b> 余量。`
+    : `${ico("check")} 月峰距 105% 阈值还有 <b>${dm.headroom_kw.toFixed(0)} kW</b> 余量。`
       + `按发改办价格〔2016〕1583号，未超阈值时<b>按核定值收取</b>——`
       + `此时削峰省不下任何基本电费，需量收益为 0`;
   const rows = [["capacity", "容量制", dm.price_capacity + " 元/千伏安·月"],
@@ -91,7 +91,7 @@ function demandCardHTML(dm) {
           <th scope="col">计费方式</th><th class="r">单价</th><th class="r">月基本电费</th></tr></thead>
         <tbody>${rows.map(([k, name, unit]) => {
           const cur = k === dm.mode;
-          return `<tr><td>${cur ? "▶ " : ""}${esc(name)}${cur ? ' <span class="tag tag-ok">当前</span>' : ""}</td>`
+          return `<tr><td>${cur ? ico("play") + " " : ""}${esc(name)}${cur ? ' <span class="tag tag-ok">当前</span>' : ""}</td>`
             + `<td class="r">${unit}</td><td class="r">${fmtMoney(dm.bills[k])}</td></tr>`;
         }).join("")}</tbody></table></div>
         <div class="info-note" style="margin-top:12px;">${verdict}</div>
@@ -106,7 +106,7 @@ function demandCardHTML(dm) {
         <div class="metric-row"><span class="metric-label">当日峰值：无储能 → 本调度</span>
           <span class="metric-value" style="color:${dm.day_peak_schedule_kw > dm.day_peak_no_storage_kw ? "var(--warning)" : "var(--success)"};">${dm.day_peak_no_storage_kw.toFixed(0)} → ${dm.day_peak_schedule_kw.toFixed(0)} kW</span></div>
         <div class="info-note" style="margin-top:12px;">
-          📐 当日峰值按 <b>${esc(dm.load_source)}</b> 计；只看电价的目标函数会在谷段尾部满功率充电、
+          ${ico("ruler")} 当日峰值按 <b>${esc(dm.load_source)}</b> 计；只看电价的目标函数会在谷段尾部满功率充电、
           与早爬坡负荷叠加，把<b>日峰顶高</b>——这一行就是那个现象的实测值。
           月口径要整月逐日求解才成立，看命令行复盘：<span style="font-family:var(--font-mono, ui-monospace, Consolas, monospace);font-size:11.8px;">python -m src.utils.demand_charge --demand-cap 2500</span>。
           单价出处：广东省电网企业代理购电工商业用户电价表（惠州市，执行 2026 年 2 月）两部制 1–10 千伏栏。
@@ -122,7 +122,7 @@ function aiExpanderHTML(exp) {
     <div class="body">
       <div class="ai-text">${exp.text ? renderMarkdown(exp.text) : "调度图未生成解释（可能未启用解释层）。点击下方按钮即时生成。"}</div>
       <div style="margin-top:12px;display:flex;gap:10px;align-items:center;">
-        <button class="btn btn-sm" id="btn-regen-exp">🔄 生成 / 刷新解释</button>
+        <button class="btn btn-sm" id="btn-regen-exp">${ico("refresh")} 生成 / 刷新解释</button>
       </div>
       <div class="caption">说明：LLM 不参与计算，只能使用调度结果事实摘要中的数字；输出会做数字回查，未匹配的数字会被标注出来。</div>
     </div>
@@ -138,7 +138,7 @@ function bindAiExpander(root) {
   // 键盘可达：button 原生支持 Enter/Space，无需额外 keydown
   $("#btn-regen-exp", exp).addEventListener("click", async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true; btn.textContent = "🧠 正在生成决策解释...";
+    btn.disabled = true; btn.innerHTML = ico("cpu") + " 正在生成决策解释...";
     try {
       const r = await API.post("/api/explain");
       $(".ai-text", exp).textContent = r.text;
@@ -151,7 +151,7 @@ function bindAiExpander(root) {
       }
       toast("决策解释已生成", "ok");
     } catch (err) { toast(`解释层异常：${err.message}`, "err"); }
-    btn.disabled = false; btn.textContent = "🔄 生成 / 刷新解释";
+    btn.disabled = false; btn.innerHTML = ico("refresh") + " 生成 / 刷新解释";
   });
 }
 
@@ -170,7 +170,7 @@ function renderDashboard(root, d) {
         ${d.alerts.map(a => `<div style="padding:10px 14px;border-radius:10px;
              background:color-mix(in srgb, var(--warning) 14%, transparent);
              border:1px solid color-mix(in srgb, var(--warning) 40%, transparent);
-             color:var(--text-1);font-size:13px;line-height:1.6;">⚠️ ${esc(a)}</div>`).join("")}
+             color:var(--text-1);font-size:13px;line-height:1.6;">${ico("warn")} ${esc(a)}</div>`).join("")}
       </div>` : ""}
 
     <div class="kpi-grid" style="margin-top:16px;">
@@ -187,7 +187,7 @@ function renderDashboard(root, d) {
       <div class="kpi-card">
         <div class="kpi-value tone-blue">${k.temp.value.toFixed(1)}℃</div>
         <div class="kpi-label">最高温度</div>
-        <div class="kpi-delta" style="color:${tempWarn ? "var(--warning)" : "var(--success)"};">${tempWarn ? "⚠️ 降额运行 (阈值45℃)" : "✅ 安全 (阈值45℃)"}</div>
+        <div class="kpi-delta" style="color:${tempWarn ? "var(--warning)" : "var(--success)"};">${tempWarn ? ico("warn") + " 降额运行 (阈值45℃)" : ico("check") + " 安全 (阈值45℃)"}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-value tone-red">${k.cycles.value.toFixed(3)}</div>
@@ -216,7 +216,7 @@ function renderDashboard(root, d) {
           }
           return `<tr><td>${esc(r.name)}</td><td class="r">${r.base}</td><td class="r">${r.opt}</td><td class="r">${impHtml}</td></tr>`;
         }).join("")}</tbody></table></div>
-        <div class="info-note" style="margin-top:12px;">📈 <b>年化估算</b>：套利${d.annual.arb}万 + DR${d.annual.dr}万(按 50 天/年) - 衰减${d.annual.deg}万 = <b>净收益${d.annual.net}万元/年</b></div>
+        <div class="info-note" style="margin-top:12px;">${ico("trend")} <b>年化估算</b>：套利${d.annual.arb}万 + DR${d.annual.dr}万(按 50 天/年) - 衰减${d.annual.deg}万 = <b>净收益${d.annual.net}万元/年</b></div>
       </div>
     </div>
 
@@ -224,7 +224,7 @@ function renderDashboard(root, d) {
 
     <div class="section-title">24小时调度概览</div>
     <div class="chart-card"><div class="chart" id="ov-sched24" style="height:560px;"></div></div>
-    <div class="caption">💡 阴影区域为需求响应(DR)时段</div>
+    <div class="caption">${ico("bulb")} 阴影区域为需求响应(DR)时段</div>
   `;
   bindOpBar(root, true);
   bindAiExpander(root);
@@ -249,11 +249,11 @@ function renderScheduling(root, d) {
         <div class="pv">${c.price}<small> 元/kWh</small></div>
       </div>`).join("")}
     </div>
-    <div class="caption">💡 充电集中在低谷/平段，放电集中在尖峰/高峰，价差即为套利空间</div>
+    <div class="caption">${ico("bulb")} 充电集中在低谷/平段，放电集中在尖峰/高峰，价差即为套利空间</div>
 
     <div style="display:flex;gap:10px;margin-top:14px;">
-      <button class="btn" id="btn-reopt">🔄 重新优化</button>
-      <a class="btn" id="btn-export-plan" download>📥 导出计划</a>
+      <button class="btn" id="btn-reopt">${ico("refresh")} 重新优化</button>
+      <a class="btn" id="btn-export-plan" download>${ico("download")} 导出计划</a>
     </div>
 
     <div class="kpi-grid" style="margin-top:14px;">
@@ -269,21 +269,21 @@ function renderScheduling(root, d) {
       <div class="chart-card"><div class="chart" id="sc-main" style="height:460px;"></div></div>
       <div>
         <div class="panel-card">
-          <div class="panel-title">🎯 优化目标</div>
+          <div class="panel-title">${ico("target")} 优化目标</div>
           <div style="font-size:13px;line-height:1.7;margin-bottom:8px;font-weight:600;">最大化净收益：<br>峰谷套利收益 ＋ 需求响应补贴 − 电池衰减成本</div>
           <details>
-            <summary style="cursor:pointer;color:var(--accent);font-size:12px;">▸ 查看数学公式</summary>
+            <summary class="formula-sum">${ico("chevronRight")} 查看数学公式</summary>
             <div style="font-family:JetBrains Mono,monospace;margin-top:6px;line-height:1.7;color:var(--text-3);font-size:11px;">
             max 净收益 =<br>套利收益 + DR补贴 − 衰减成本<br>s.t. SOC∈[${d.soc_range[0]}%,${d.soc_range[1]}%]<br>&nbsp;&nbsp;&nbsp;&nbsp;功率 ≤ ${k.rated_power}kW<br>&nbsp;&nbsp;&nbsp;&nbsp;温度 ≤ 45℃(降额)</div>
           </details>
         </div>
         <div class="panel-card" style="margin-top:12px;">
-          <div class="panel-title">📐 约束参数</div>
+          <div class="panel-title">${ico("ruler")} 约束参数</div>
           <div class="metric-row"><span class="metric-label">SOC范围</span><span class="metric-value">${d.soc_range[0]}% - ${d.soc_range[1]}%</span></div>
           <div class="metric-row"><span class="metric-label">功率上限</span><span class="metric-value">≤ ${k.rated_power}kW</span></div>
           <div class="metric-row"><span class="metric-label">温度约束</span><span class="metric-value">≤45℃降额</span></div>
           <details style="margin-top:10px;">
-            <summary style="cursor:pointer;color:var(--accent);font-size:12px;">✏️ 修改参数后重新优化</summary>
+            <summary style="cursor:pointer;color:var(--accent);font-size:12px;">${ico("pencil")} 修改参数后重新优化</summary>
             <div style="margin-top:10px;display:flex;flex-direction:column;gap:12px;">
               <div class="field"><label>最低SOC (%) <b class="num" id="v-socmin">${d.soc_range[0]}</b></label>
                 <input type="range" id="sp-socmin" min="10" max="40" value="${d.soc_range[0]}"></div>
@@ -291,7 +291,7 @@ function renderScheduling(root, d) {
                 <input type="range" id="sp-socmax" min="70" max="100" value="${d.soc_range[1]}"></div>
               <div class="field"><label>额定功率 (kW) <b class="num" id="v-power">${k.rated_power}</b></label>
                 <input type="range" id="sp-power" min="500" max="2000" step="100" value="${k.rated_power}"></div>
-              <button class="btn btn-primary btn-sm" id="sp-apply">✅ 应用并重新优化</button>
+              <button class="btn btn-primary btn-sm" id="sp-apply">${ico("check")} 应用并重新优化</button>
             </div>
           </details>
         </div>
@@ -300,12 +300,12 @@ function renderScheduling(root, d) {
 
     <div class="section-title">策略对比</div>
     ${d.compare.opt.time_limit_hit ? `<div class="panel-card" style="border-color:var(--warning,#f59e0b);margin-bottom:10px;">
-        <div class="metric-row"><span class="metric-label">⚠️ 求解状态</span>
+        <div class="metric-row"><span class="metric-label">${ico("warn")} 求解状态</span>
         <span class="metric-value" style="color:var(--warning,#f59e0b);">次优解（${esc(d.compare.opt.solver_status)} · gap ${d.compare.opt.mip_gap_pct}%）</span></div>
       </div>` : ""}
     <div class="vs-grid">
       <div class="panel-card panel-hl">
-        <div class="panel-title" style="color:var(--accent);">✅ 优化策略（本系统）</div>
+        <div class="panel-title" style="color:var(--accent);">${ico("check")} 优化策略（本系统）</div>
         <div class="metric-row"><span class="metric-label">套利收益</span><span class="metric-value" style="color:var(--accent);">${fmtMoney(d.compare.opt.arbitrage_revenue_yuan)}</span></div>
         <div class="metric-row"><span class="metric-label">最高温度</span><span class="metric-value">${d.compare.opt.max_battery_temp_c.toFixed(1)}℃</span></div>
         <div class="metric-row"><span class="metric-label">等效循环</span><span class="metric-value">${d.compare.opt.equivalent_cycles.toFixed(3)}</span></div>
@@ -313,7 +313,7 @@ function renderScheduling(root, d) {
       </div>
       <div class="vs-arrow"><div class="arr">→</div><div class="pct">+${d.compare.arb_imp.toFixed(1)}%</div><div class="lbl">套利收益增幅</div></div>
       <div class="panel-card">
-        <div class="panel-title" style="color:var(--text-3);">📉 基准策略（低谷充满高峰放完）</div>
+        <div class="panel-title" style="color:var(--text-3);">${ico("lineDown")} 基准策略（低谷充满高峰放完）</div>
         <div class="metric-row"><span class="metric-label">套利收益</span><span class="metric-value">${fmtMoney(d.compare.base.arbitrage_revenue_yuan)}</span></div>
         <div class="metric-row"><span class="metric-label">最高温度</span><span class="metric-value" style="color:var(--danger);">${d.compare.base.max_battery_temp_c.toFixed(1)}℃</span></div>
         <div class="metric-row"><span class="metric-label">等效循环</span><span class="metric-value">${d.compare.base.equivalent_cycles.toFixed(3)}</span></div>
@@ -362,11 +362,11 @@ function renderForecast(root, d) {
     <div class="page-subtitle">XGBoost时序预测 · 传热学温度物理修正 · 96点15分钟粒度</div>
 
     <div style="display:flex;gap:10px;margin-top:14px;">
-      <button class="btn" id="btn-refc">🔄 重新预测</button>
-      <button class="btn" id="btn-mccfg">⚙️ 模型配置</button>
+      <button class="btn" id="btn-refc">${ico("refresh")} 重新预测</button>
+      <button class="btn" id="btn-mccfg">${ico("gear")} 模型配置</button>
     </div>
     <div class="ai-expander" id="fc-mccfg" style="display:none;margin-top:12px;">
-      <div class="head">📊 XGBoost模型配置<span style="font-size:11px;color:var(--text-3);font-weight:400;">▼</span></div>
+      <div class="head">${ico("bars")} XGBoost模型配置<span class="chev-inline">${ico("chevron")}</span></div>
       <div class="body">
         <div class="grid grid-2" style="gap:12px 18px;">
           <div class="field"><label>最大树深度 (3-12)</label><input type="number" id="xgb-depth" min="3" max="12" value="${State.boot.params.xgb_max_depth}"></div>
@@ -384,7 +384,7 @@ function renderForecast(root, d) {
       <div class="kpi-card"><div class="kpi-value tone-blue">${k.mape.toFixed(1)}%</div>
         <div class="kpi-label"><span class="term-tip" title="MAPE（平均绝对百分比误差）：预测值与真实值偏差的平均百分比，越低越准。10%以内对调度决策已经足够可靠。">预测MAPE</span></div></div>
       <div class="kpi-card"><div class="kpi-value tone-blue">${fmtNum(k.peak)}kW</div><div class="kpi-label">峰值负荷</div>
-        ${k.is_custom ? `<div style="font-size:9px;color:var(--warning);margin-top:3px;">⚠ 基于上传数据</div>` : ""}</div>
+        ${k.is_custom ? `<div style="font-size:9px;color:var(--warning);margin-top:3px;">${ico("warn")} 基于上传数据</div>` : ""}</div>
       <div class="kpi-card"><div class="kpi-value tone-blue">${fmtNum(k.valley)}kW</div><div class="kpi-label">谷值负荷</div></div>
       <div class="kpi-card"><div class="kpi-value tone-warn">${physStr}</div>
         <div class="kpi-label"><span class="term-tip" title="引入传热学温度修正后，预测误差相对纯AI拟合下降的百分比。">物理修正增益</span></div></div>
@@ -397,12 +397,12 @@ function renderForecast(root, d) {
         <div class="chart-card"><div class="chart-title">XGBoost特征重要性（模型真实输出）</div><div class="chart" id="fc-fi" style="height:210px;"></div></div>
         ${d.feature_importance.length === 0 ? `
         <div class="empty-state" style="margin-top:12px;">
-          <div class="ico">🧠</div><div class="t">模型尚未训练</div>
+          <div class="ico">${ico("cpu")}</div><div class="t">模型尚未训练</div>
           <div class="d">开启 XGBoost 负荷预测并运行一次调度后，<br>这里会展示模型学到的关键特征（滞后负荷、时段、温度等）</div>
-          <button class="btn btn-primary btn-sm" style="margin-top:10px;" id="btn-enable-ml">🚀 去开启预测并运行</button>
+          <button class="btn btn-primary btn-sm" style="margin-top:10px;" id="btn-enable-ml">${ico("play")} 去开启预测并运行</button>
         </div>` : ""}
         <div class="panel-card" style="margin-top:12px;">
-          <div class="panel-title">🌡️ 传热学物理修正</div>
+          <div class="panel-title">${ico("thermometer")} 传热学物理修正</div>
           <div class="metric-row"><span class="metric-label">商业冷负荷</span><span class="metric-value" style="color:var(--blue);">+4-6%/℃</span></div>
           <div class="metric-row"><span class="metric-label">工业制冷负荷</span><span class="metric-value" style="color:var(--accent);">+2-3%/℃</span></div>
           <div class="metric-row"><span class="metric-label">工艺保底</span><span class="metric-value" style="color:var(--accent);">最低负荷约束</span></div>
@@ -415,7 +415,7 @@ function renderForecast(root, d) {
     <div class="grid grid-2-1-2">
       <div class="chart-card"><div class="chart-title">误差分布（MAPE）</div><div class="chart" id="fc-hist" style="height:210px;"></div></div>
       <div class="panel-card" style="display:flex;flex-direction:column;justify-content:center;text-align:center;">
-        <div class="panel-title" style="text-align:center;">🌡️ 物理修正效果</div>
+        <div class="panel-title" style="text-align:center;">${ico("thermometer")} 物理修正效果</div>
         <div style="font-size:26px;color:var(--accent);font-weight:700;font-family:var(--font-num);">${physStr}</div>
         <div style="font-size:10px;color:var(--text-3);">准确率提升</div>
         <div class="metric-row" style="margin-top:10px;border:none;"><span class="metric-label">纯AI拟合</span><span class="metric-value" style="color:var(--danger);">MAPE ${k.mape_raw.toFixed(1)}%</span></div>
@@ -484,8 +484,8 @@ function renderThermal(root, d) {
   const r = (eng ? d.eng : d.pure_econ).report;
   const cur = d.current;
   const modeTag = eng
-    ? `<span class="status-tag st-ok">✅ 工程可行策略</span>`
-    : `<span class="status-tag st-danger">⚠️ 纯经济策略（无热约束）</span>`;
+    ? `<span class="status-tag st-ok">${ico("check")} 工程可行策略</span>`
+    : `<span class="status-tag st-danger">${ico("warn")} 纯经济策略（无热约束）</span>`;
   const tempStatus = r.max_battery_temp_c < 45 ? ["安全", "st-ok", "var(--accent)"]
     : r.max_battery_temp_c < 55 ? ["降额", "st-warn", "var(--warning)"] : ["超温", "st-danger", "var(--danger)"];
   const scopes = { "全天 00-24": [0, 24], "凌晨 00-08": [0, 8], "日间 08-16": [8, 16], "晚峰 16-24": [16, 24] };
@@ -496,7 +496,7 @@ function renderThermal(root, d) {
 
     <div style="display:flex;align-items:center;gap:14px;margin-top:16px;flex-wrap:wrap;">
       <label class="switch"><input type="checkbox" id="th-toggle" ${eng ? "checked" : ""}><span class="track"></span></label>
-      <span style="font-size:13px;color:var(--text-2);">🛡️ 工程可行策略（热约束 + 寿命衰减计入目标函数）</span>
+      <span style="font-size:13px;color:var(--text-2);">${ico("shield")} 工程可行策略（热约束 + 寿命衰减计入目标函数）</span>
       ${modeTag}
     </div>
 
@@ -536,10 +536,10 @@ function renderThermal(root, d) {
     </div>
     <div class="chart-card" style="padding-bottom:0;">
       <div class="subtabs" style="margin-bottom:0;">
-        <button class="subtab active" data-t="temp">🌡️ 温度趋势</button>
-        <button class="subtab" data-t="load">📈 负荷对比</button>
-        <button class="subtab" data-t="power">⚡ 功率与SOC</button>
-        <button class="subtab" data-t="rev">💰 收益分解</button>
+        <button class="subtab active" data-t="temp">${ico("thermometer")} 温度趋势</button>
+        <button class="subtab" data-t="load">${ico("trend")} 负荷对比</button>
+        <button class="subtab" data-t="power">${ico("bolt")} 功率与SOC</button>
+        <button class="subtab" data-t="rev">${ico("money")} 收益分解</button>
       </div>
       <div style="padding:6px 0 10px;">
         <div class="tabpane active" data-t="temp"><div class="chart" id="th-temp" style="height:380px;"></div></div>
@@ -557,20 +557,20 @@ function renderThermal(root, d) {
       }).join("");
     })()}</div>
 
-    <div class="section-title">📋 需求响应事件日志（24小时调度记录）</div>
+    <div class="section-title">${ico("clipboard")} 需求响应事件日志（24小时调度记录）</div>
     <div class="table-wrap"><table class="dtable">
       <thead><tr><th scope="col">时间</th><th scope="col">事件类型</th><th scope="col">动作</th><th scope="col">热安全校验</th><th style="text-align:center;">结果</th><th class="r">净收益</th></tr></thead>
       <tbody>${d.dr_log.map((row) => {
         const rej = row.status === "拒绝";
         return `<tr style="${rej ? "background:var(--danger-soft);" : ""}">
           <td class="num">${esc(row.time)}</td><td>${esc(row.type)}</td><td>${esc(row.action)}</td>
-          <td>${esc(row.thermal)}</td>
+          <td>${iconize(row.thermal)}</td>
           <td style="text-align:center;"><span class="status-tag ${rej ? "st-danger" : "st-ok"}">${esc(row.status)}</span></td>
           <td class="r" style="color:${rej ? "var(--text-3)" : "var(--accent)"};font-weight:600;">${esc(row.net)}</td></tr>`;
       }).join("")}</tbody></table></div>
-    <div class="caption">💡 需求响应Agent执行三重校验：热安全校验 → 用能底线校验 → 收益校验，净收益为正且安全可行才执行</div>
+    <div class="caption">${ico("bulb")} 需求响应Agent执行三重校验：热安全校验 → 用能底线校验 → 收益校验，净收益为正且安全可行才执行</div>
 
-    <div class="section-title">🔬 热模型与寿命衰减参数</div>
+    <div class="section-title">${ico("gauge")} 热模型与寿命衰减参数</div>
     <div class="grid grid-2">
       <div class="panel-card">
         <div class="panel-title">一阶RC热模型</div>
@@ -630,8 +630,8 @@ function renderDemandResponse(root, d) {
 
     <div class="chart-card" style="margin-top:16px;padding-bottom:12px;">
       <div class="subtabs" style="margin-bottom:0;">
-        <button class="subtab active" data-t="manual">⚡ 手动触发</button>
-        <button class="subtab" data-t="hist">📋 历史记录</button>
+        <button class="subtab active" data-t="manual">${ico("bolt")} 手动触发</button>
+        <button class="subtab" data-t="hist">${ico("clipboard")} 历史记录</button>
       </div>
       <div style="padding-top:14px;">
         <div class="tabpane active" data-t="manual">
@@ -647,7 +647,7 @@ function renderDemandResponse(root, d) {
             <div style="display:flex;flex-direction:column;gap:10px;">
               <div class="field"><label>DR类型</label>
                 <select id="dr-type"><option>削峰</option><option>填谷</option><option>备用</option></select></div>
-              <button class="btn btn-primary" id="dr-confirm" style="margin-top:auto;">✅ 确认触发</button>
+              <button class="btn btn-primary" id="dr-confirm" style="margin-top:auto;">${ico("check")} 确认触发</button>
             </div>
           </div>
         </div>
@@ -658,12 +658,12 @@ function renderDemandResponse(root, d) {
             <tbody>${d.history.map((h) => `
               <tr><td class="num">${esc(h.time)}</td><td>${esc(h.type)}</td><td class="r">${esc(h.target)}</td>
               <td class="r">${esc(h.energy)}</td><td class="r">¥${esc(h.subsidy)}</td>
-              <td style="text-align:center;">${h.accepted ? "✅ 接受" : "🚫 拒绝"}</td>
+              <td style="text-align:center;">${h.accepted ? ico("check") + " 接受" : ico("ban") + " 拒绝"}</td>
               <td style="font-size:11.5px;">${esc(h.reason)}</td></tr>`).join("")}</tbody>
           </table></div>` : `
           <div class="empty-state">
-            <div class="ico">📭</div><div class="t">暂无DR事件记录</div>
-            <div class="d">切换到「⚡ 手动触发」创建一个需求响应事件，或等待电网DR信号接入</div>
+            <div class="ico">${ico("inbox")}</div><div class="t">暂无DR事件记录</div>
+            <div class="d">切换到「${ico("bolt")} 手动触发」创建一个需求响应事件，或等待电网DR信号接入</div>
           </div>`}
         </div>
       </div>
@@ -679,15 +679,15 @@ function renderDemandResponse(root, d) {
     <div class="section-title">今日DR事件时间轴</div>
     <div class="grid grid-3-2">
       <div class="chart-card">${d.details.length ? `<div class="chart" id="dr-gantt" style="height:230px;"></div>`
-        : `<div class="empty-state" style="border:none;">📭 当前无需求响应事件</div>`}</div>
+        : `<div class="empty-state" style="border:none;">${ico("inbox")} 当前无需求响应事件</div>`}</div>
       <div class="panel-card">
-        <div class="panel-title">📋 事件详情</div>
+        <div class="panel-title">${ico("clipboard")} 事件详情</div>
         ${d.details.map((x) => {
           const rate = x.target > 0 ? Math.min(100, x.actual / x.target * 100) : 0;
           return `<div style="padding:8px 0;border-bottom:1px solid var(--border);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
               <span style="font-weight:600;font-size:12.5px;">DR事件 #${x.idx}</span>
-              <span class="status-tag ${x.accepted ? "st-ok" : "st-danger"}">${x.accepted ? "✅ 接受" : "❌ 拒绝"}</span></div>
+              <span class="status-tag ${x.accepted ? "st-ok" : "st-danger"}">${x.accepted ? ico("check") + " 接受" : ico("cross") + " 拒绝"}</span></div>
             <div class="metric-row" style="border:none;padding:3px 0;"><span class="metric-label">时段</span><span class="metric-value">${esc(x.time)}</span></div>
             <div class="metric-row" style="border:none;padding:3px 0;"><span class="metric-label">目标/实际</span><span class="metric-value">${x.target.toFixed(0)}/${x.actual.toFixed(0)}kW</span></div>
             <div class="metric-row" style="border:none;padding:3px 0;"><span class="metric-label">补贴/净收益</span><span class="metric-value" style="color:var(--accent);">¥${x.subsidy.toFixed(2)}/¥${x.net.toFixed(2)}</span></div>
@@ -700,10 +700,10 @@ function renderDemandResponse(root, d) {
 
     <div class="section-title">三重可行性校验</div>
     <div class="feas-list">
-      <div class="feas-item pass"><div class="fi">✅</div><div class="fn">SOC可行性</div><div class="fr">电量充足 · 可响应</div></div>
-      <div class="feas-item pass"><div class="fi">✅</div><div class="fn">功率可行性</div><div class="fr">≤额定功率${d.feasibility.rated_power}kW</div></div>
+      <div class="feas-item pass"><div class="fi">${ico("check")}</div><div class="fn">SOC可行性</div><div class="fr">电量充足 · 可响应</div></div>
+      <div class="feas-item pass"><div class="fi">${ico("check")}</div><div class="fn">功率可行性</div><div class="fr">≤额定功率${d.feasibility.rated_power}kW</div></div>
       <div class="feas-item ${d.feasibility.temp_pass ? "pass" : "fail"}">
-        <div class="fi">${d.feasibility.temp_pass ? "✅" : "❌"}</div><div class="fn">温度可行性</div>
+        <div class="fi">${d.feasibility.temp_pass ? ico("check") : ico("cross")}</div><div class="fn">温度可行性</div>
         <div class="fr">${d.feasibility.temp_pass ? `最高${d.feasibility.max_temp.toFixed(1)}℃ · 安全` : `预计${d.feasibility.max_temp.toFixed(1)}℃ · 超温驳回`}</div>
         ${d.feasibility.temp_pass ? "" : `<div class="fs">原因：响应时段温升将超过45℃降额阈值。<br>建议：降低该时段放电功率至800kW以下，或改在温度较低时段响应。</div>`}
       </div>
@@ -746,7 +746,7 @@ async function renderSettings(root) {
     if (e && e.status === 401) return; // 401 已弹登录层
     console.error("[renderSettings]", e);
     root.innerHTML = `<div class="empty-state" style="margin-top:40px;">
-      <div class="ico">⚠️</div><div class="t">设置页加载失败</div>
+      <div class="ico">${ico("warn")}</div><div class="t">设置页加载失败</div>
       <div class="d">${esc(e.message || "未知错误")}</div>
       <div style="margin-top:10px;"><button class="btn btn-sm" id="st-retry">重试</button></div>
     </div>`;
@@ -764,9 +764,9 @@ async function _renderSettings(root) {
     <div class="settings-layout">
       <aside class="set-nav">
         <div class="set-nav-title">设置</div>
-        <button class="set-nav-item active" data-panel="model">🤖 模型设置</button>
-        <button class="set-nav-item" data-panel="schedule">🔋 调度参数</button>
-        <button class="set-nav-item" data-panel="appearance">🎨 外观主题</button>
+        <button class="set-nav-item active" data-panel="model">${ico("bot")} 模型设置</button>
+        <button class="set-nav-item" data-panel="schedule">${ico("battery")} 调度参数</button>
+        <button class="set-nav-item" data-panel="appearance">${ico("palette")} 外观主题</button>
       </aside>
       <div class="set-resizer" title="拖拽调整导航宽度（170-360）" role="separator" aria-orientation="vertical" tabindex="0"></div>
       <div class="set-body">
@@ -780,7 +780,7 @@ async function _renderSettings(root) {
           </div>
           <div class="mp-toolbar">
             <select id="mp-sel" class="mp-sel">${mp.providers.map((pr) => `<option value="${esc(pr.id)}" ${pr.id === edit.id ? "selected" : ""}>${esc(pr.name || "未命名")}</option>`).join("")}</select>
-            <button class="btn btn-add-green" id="mp-add">＋ 添加供应商</button>
+            <button class="btn btn-add-green" id="mp-add">${ico("plus")} 添加供应商</button>
           </div>
 
           <div class="mp-grid3">
@@ -790,7 +790,7 @@ async function _renderSettings(root) {
               <div class="field" style="margin-top:10px;"><label>Base URL</label><input type="text" id="mp-base" value="${esc(edit.base_url || "")}" placeholder="https://api.example.com/v1"></div>
               <div class="mp-duo" style="margin-top:10px;">
                 <div class="field"><label>API Key</label>
-                  <div class="pw-wrap"><input type="password" id="mp-key" value="" placeholder="${edit.has_key ? "留空保持不变" : "输入 API Key"}"><button type="button" class="pw-eye" id="mp-eye" title="显示/隐藏">👁</button></div>
+                  <div class="pw-wrap"><input type="password" id="mp-key" value="" placeholder="${edit.has_key ? "留空保持不变" : "输入 API Key"}"><button type="button" class="pw-eye" id="mp-eye" title="显示/隐藏">${ico("eye")}</button></div>
                   <div class="field-hint" id="mp-key-hint">${edit.has_key ? "已配置 " + esc(edit.api_key_masked || "****") : "尚未配置"}</div></div>
                 <div class="field"><label>格式</label>
                   <select id="mp-fmt">${fmtOptions.map((f) => `<option ${f === edit.api_format ? "selected" : ""}>${f}</option>`).join("")}</select></div>
@@ -800,13 +800,13 @@ async function _renderSettings(root) {
 
             <div class="mp-col">
               <div class="panel-card">
-                <div class="panel-title">模型列表<span class="chev">▼</span></div>
-                ${(edit.models || []).length === 0 ? `<div class="caption">ℹ️ 当前没有配置模型，添加后可在聊天中使用。</div>` : ""}
+                <div class="panel-title">模型列表<span class="chev">${ico("chevron")}</span></div>
+                ${(edit.models || []).length === 0 ? `<div class="caption">${ico("info")} 当前没有配置模型，添加后可在聊天中使用。</div>` : ""}
                 <div id="mp-models" style="display:flex;flex-direction:column;gap:4px;">
                   ${(edit.models || []).map((m) => {
                     const enabled = (edit.enabled_models || edit.models || []).includes(m);
                     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;">
-                      <span style="font-size:12.5px;color:var(--text-2);">📦 ${esc(m)}</span>
+                      <span style="font-size:12.5px;color:var(--text-2);">${ico("box")} ${esc(m)}</span>
                       <label class="switch"><input type="checkbox" data-model="${esc(m)}" ${enabled ? "checked" : ""}><span class="track"></span></label></div>`;
                   }).join("")}
                 </div>
@@ -815,36 +815,36 @@ async function _renderSettings(root) {
                   <button class="btn btn-sm" id="mp-add-model">＋ 添加模型</button>
                 </div>
               </div>
-              <div class="panel-card" style="margin-top:14px;">
+              <div class="panel-card">
                 <div class="mp-actions" style="margin-top:0;">
-                  <button class="btn" id="mp-test">⊕ 测试连接</button>
+                  <button class="btn" id="mp-test">${ico("plug")} 测试连接</button>
                   <button class="btn btn-primary" id="mp-set-active">设为当前使用</button>
-                  <button class="btn" id="mp-save">💾 保存修改</button>
+                  <button class="btn" id="mp-save">${ico("save")} 保存修改</button>
                 </div>
               </div>
             </div>
 
             <div class="mp-col">
               <div class="panel-card">
-                <div class="panel-title">操作参数<span class="chev">▼</span></div>
+                <div class="panel-title">操作参数<span class="chev">${ico("chevron")}</span></div>
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
-                  <span style="font-size:12.5px;color:var(--text-2);">🌡 Temperature <b class="num" id="lp-tv2">${lp.temperature}</b></span>
+                  <span style="font-size:12.5px;color:var(--text-2);">${ico("thermometer")} Temperature <b class="num" id="lp-tv2">${lp.temperature}</b></span>
                   <label class="switch"><input type="checkbox" id="lp-stream" ${lp.stream ? "checked" : ""}><span class="track"></span></label>
                 </div>
                 <div class="caption" style="margin-top:6px;">开关 = 流式输出（开启后对话逐字返回；关闭则整段返回）</div>
               </div>
-              <div class="panel-card" style="margin-top:14px;">
-                <div class="panel-title">推理参数<span class="chev">▼</span></div>
+              <div class="panel-card">
+                <div class="panel-title">推理参数<span class="chev">${ico("chevron")}</span></div>
                 <div class="field"><label>温度 Temperature <b id="lp-tv">${lp.temperature}</b></label>
                   <input type="range" id="lp-temp" min="0" max="1" step="0.05" value="${lp.temperature}"></div>
                 <div class="field" style="margin-top:10px;"><label>最大 Tokens (128-8192)</label><input type="number" id="lp-tok" min="128" max="8192" step="128" value="${lp.max_tokens}"></div>
                 <div style="display:flex;justify-content:flex-end;margin-top:14px;">
-                  <button class="btn btn-sm" id="lp-save">💾 保存推理参数</button>
+                  <button class="btn btn-sm" id="lp-save">${ico("save")} 保存推理参数</button>
                 </div>
               </div>
               <div class="mp-danger">
-                <span class="caption" style="margin:0;display:block;text-align:center;">⚠️ 危险操作（不可撤销）</span>
-                <button class="btn btn-danger-ghost" id="mp-del" style="width:100%;margin-top:8px;">🗑 删除该供应商</button>
+                <span class="caption" style="margin:0;display:block;text-align:center;">${ico("warn")} 危险操作（不可撤销）</span>
+                <button class="btn btn-danger-ghost" id="mp-del" style="width:100%;margin-top:8px;">${ico("trash")} 删除该供应商</button>
               </div>
             </div>
           </div>
@@ -858,16 +858,16 @@ async function _renderSettings(root) {
             </div>
           </div>
           <div style="display:flex;gap:10px;margin-bottom:14px;align-items:center;">
-      <button class="btn" id="btn-reset-cfg">🔄 恢复默认</button>
+      <button class="btn" id="btn-reset-cfg">${ico("refresh")} 恢复默认</button>
       <span style="flex:1;"></span>
-      <button class="btn btn-primary" id="btn-save-cfg">💾 保存配置</button>
+      <button class="btn btn-primary" id="btn-save-cfg">${ico("save")} 保存配置</button>
     </div>
     <div id="save-cfg-msg" class="caption" style="text-align:right;margin:-6px 0 10px;"></div>
 
     <div class="sch-grid">
 
       <div class="panel-card">
-        <div class="panel-title">🔋 电池参数</div>
+        <div class="panel-title">${ico("battery")} 电池参数</div>
         <div class="bat-grid">
           <div class="field"><label>最低SOC (%) <b id="v-p-socmin">${p.soc_min}</b></label>
             <input type="range" id="p-socmin" min="10" max="40" value="${p.soc_min}"></div>
@@ -884,7 +884,7 @@ async function _renderSettings(root) {
         </div>
       </div>
       <div class="panel-card">
-        <div class="panel-title">💰 电价配置</div>
+        <div class="panel-title">${ico("money")} 电价配置</div>
         <div class="grid grid-2" style="gap:10px;">
           <div class="field"><label>尖峰 (元/kWh)</label><input type="number" id="price-peak" min="0" step="0.00001" value="${p.price_peak}"></div>
           <div class="field"><label>高峰 (元/kWh)</label><input type="number" id="price-high" min="0" step="0.00001" value="${p.price_high}"></div>
@@ -894,10 +894,10 @@ async function _renderSettings(root) {
         <div style="margin-top:10px;">
           ${(engineCfg().price_periods || []).map((pp) => `<div class="metric-row"><span class="metric-label"><span class="status-tag ${pp.cls}">${pp.name}</span></span><span class="metric-value">${pp.hours}</span></div>`).join("")}
         </div>
-        <div class="caption" style="margin-top:8px;">💡 时段划分与生效月份来自粤发改价格〔2021〕331 号，由引擎下发（<code>PRICE_PERIODS</code>）；这里只改价格数值。</div>
+        <div class="caption" style="margin-top:8px;">${ico("bulb")} 时段划分与生效月份来自粤发改价格〔2021〕331 号，由引擎下发（<code>PRICE_PERIODS</code>）；这里只改价格数值。</div>
       </div>
       <div class="panel-card">
-        <div class="panel-title">⚙️ 优化选项</div>
+        <div class="panel-title">${ico("gear")} 优化选项</div>
         <div class="opt-grid">
           <label class="check"><input type="checkbox" id="opt-thermal" ${p.include_thermal ? "checked" : ""}>热安全约束</label>
           <label class="check"><input type="checkbox" id="opt-deg" ${p.include_degradation ? "checked" : ""}>寿命衰减成本</label>
@@ -906,8 +906,8 @@ async function _renderSettings(root) {
         </div>
         <div style="border-top:1px solid var(--border);margin:10px 0;padding-top:10px;font-size:12.5px;font-weight:600;">编排引擎</div>
         <div class="eng-grid">
-          <button class="btn" id="eng-lg" style="${p.orchestrator === "LangGraph" ? "background:var(--accent-soft);border-color:var(--accent);color:var(--accent);" : ""}">⬡ LangGraph</button>
-          <button class="btn" id="eng-py" style="${p.orchestrator === "纯Python" ? "background:var(--accent-soft);border-color:var(--accent);color:var(--accent);" : ""}">◉ 纯Python</button>
+          <button class="btn" id="eng-lg" style="${p.orchestrator === "LangGraph" ? "background:var(--accent-soft);border-color:var(--accent);color:var(--accent);" : ""}">${ico("hexagon")} LangGraph</button>
+          <button class="btn" id="eng-py" style="${p.orchestrator === "纯Python" ? "background:var(--accent-soft);border-color:var(--accent);color:var(--accent);" : ""}">${ico("code")} 纯Python</button>
         </div>
         <div class="caption">LangGraph: 有向图状态机编排 | 纯Python: 线性流程编排</div>
       </div>
@@ -923,22 +923,22 @@ async function _renderSettings(root) {
           </div>
           <div class="ap-wrap">
             <div class="panel-card">
-              <div class="panel-title">🎨 主题模式</div>
+              <div class="panel-title">${ico("palette")} 主题模式</div>
               <div class="theme-cards">
                 <button type="button" class="theme-card ${State.theme === "light" ? "sel" : ""}" data-th="light">
-                  <span class="tc-check">✓</span>
+                  <span class="tc-check">${ico("check")}</span>
                   <span class="tc-preview tc-light" aria-hidden="true"><i class="tp-side"></i><i class="tp-main"><i class="tp-bar"></i><i class="tp-chart"></i><i class="tp-btn"></i></i></span>
-                  <b>☀️ 浅色模式</b><span class="tc-d">Arco Pro 风格，适合日间使用</span>
+                  <b>${ico("sun")} 浅色模式</b><span class="tc-d">Arco Pro 风格，适合日间使用</span>
                 </button>
                 <button type="button" class="theme-card ${State.theme === "dark" ? "sel" : ""}" data-th="dark">
-                  <span class="tc-check">✓</span>
+                  <span class="tc-check">${ico("check")}</span>
                   <span class="tc-preview tc-dark" aria-hidden="true"><i class="tp-side"></i><i class="tp-main"><i class="tp-bar"></i><i class="tp-chart"></i><i class="tp-btn"></i></i></span>
-                  <b>🌙 深色模式</b><span class="tc-d">BlockPulse 风格，适合夜间使用</span>
+                  <b>${ico("moon")} 深色模式</b><span class="tc-d">BlockPulse 风格，适合夜间使用</span>
                 </button>
               </div>
             </div>
             <div class="panel-card">
-              <div class="panel-title">🎛️ 外观偏好</div>
+              <div class="panel-title">${ico("sliders")} 外观偏好</div>
               <div class="pref-grid">
                 <div class="pref-row">
                   <div><div class="pt">跟随系统主题</div><div class="pd">开启后自动切换深浅色，手动选择将关闭此项</div></div>
@@ -958,7 +958,7 @@ async function _renderSettings(root) {
                 </div>
               </div>
             </div>
-            <div class="caption ap-tip">💡 提示：主题与外观偏好保存在本地浏览器，清除缓存后恢复默认</div>
+            <div class="caption ap-tip">${ico("bulb")} 提示：主题与外观偏好保存在本地浏览器，清除缓存后恢复默认</div>
           </div>
         </section>
 
@@ -1075,7 +1075,7 @@ async function _renderSettings(root) {
     const inp = $("#mp-key", root);
     const show = inp.type === "password";
     inp.type = show ? "text" : "password";
-    $("#mp-eye", root).textContent = show ? "🙈" : "👁";
+    $("#mp-eye", root).innerHTML = show ? ico("eyeOff") : ico("eye");
   });
   /* 流式输出开关：即时生效——此前必须另点「保存推理参数」才落盘，
      用户拨了开关以为已开启，对话仍是整段返回。 */
@@ -1105,7 +1105,7 @@ async function _renderSettings(root) {
   $("#btn-save-cfg", root).addEventListener("click", async () => {
     await collectSettingsParams(root);
     const r = await API.post("/api/settings/save");
-    $("#save-cfg-msg", root).textContent = "✅ " + r.msg;
+    $("#save-cfg-msg", root).innerHTML = ico("check") + " " + esc(r.msg);
     toast("配置已保存", "ok");
   });
   $("#btn-reset-cfg", root).addEventListener("click", async () => {
@@ -1225,7 +1225,7 @@ async function renderTraces(root) {
   root.innerHTML = `
     <div class="page-title">运行追溯</div>
     <div class="page-subtitle">每次求解 / 对话 / 解释 / 寻优的事件序列 · 只读</div>
-    <div class="empty-state"><div class="ico">⏱️</div><div class="t">加载中…</div></div>`;
+    <div class="empty-state"><div class="ico">${ico("clock")}</div><div class="t">加载中…</div></div>`;
   let data;
   try {
     data = await API.get("/api/traces?limit=50");
@@ -1234,7 +1234,7 @@ async function renderTraces(root) {
     if (e && e.status === 401) return;
     root.innerHTML = `
       <div class="page-title">运行追溯</div>
-      <div class="empty-state"><div class="ico">⚠️</div><div class="t">追溯接口读取失败</div>
+      <div class="empty-state"><div class="ico">${ico("warn")}</div><div class="t">追溯接口读取失败</div>
         <div class="d">${esc(e.message || "未知错误")}</div>
         <div style="margin-top:10px;"><button class="btn btn-sm" id="tr-retry">重试</button></div></div>`;
     $("#tr-retry", root).addEventListener("click", () => App.showPage("traces"));
@@ -1272,7 +1272,7 @@ async function renderTraces(root) {
       <code>logs/traces/trace-YYYYMMDD.jsonl</code>，接口不提供读历史文件的能力。
     </div>
 
-    <div class="section-title">🧾 最近运行（点一行看事件序列）</div>
+    <div class="section-title">${ico("receipt")} 最近运行（点一行看事件序列）</div>
     ${runs.length ? `
     <div class="table-wrap"><table class="dtable">
       <thead><tr><th scope="col">开始时间</th><th scope="col">类型</th>
@@ -1289,7 +1289,7 @@ async function renderTraces(root) {
           <td>${esc(r.slowest_span || "—")}${r.slowest_span ? ` <span class="num" style="color:var(--text-3);">(${_fmtMs(r.slowest_ms)})</span>` : ""}</td>
         </tr>`).join("")}</tbody>
     </table></div>` : `
-    <div class="empty-state"><div class="ico">🗂️</div><div class="t">还没有运行记录</div>
+    <div class="empty-state"><div class="ico">${ico("archive")}</div><div class="t">还没有运行记录</div>
       <div class="d">去「数据总览」点一次重新调度，或打开右侧对话问一句，回来这里就有了。</div></div>`}
 
     <div id="tr-detail"></div>`;
@@ -1298,7 +1298,7 @@ async function renderTraces(root) {
   $$("tr[data-run]", root).forEach((tr) => tr.addEventListener("click", async () => {
     $$("tr[data-run]", root).forEach((x) => x.style.background = "");
     tr.style.background = "var(--accent-soft)";
-    detail.innerHTML = `<div class="section-title">🔍 事件序列</div>
+    detail.innerHTML = `<div class="section-title">${ico("search")} 事件序列</div>
       <div class="empty-state"><div class="t">加载中…</div></div>`;
     detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
     const id = tr.getAttribute("data-run") || "";
@@ -1306,15 +1306,15 @@ async function renderTraces(root) {
     try {
       rt = await API.get("/api/traces/" + encodeURIComponent(id));
     } catch (e) {
-      detail.innerHTML = `<div class="section-title">🔍 事件序列</div>
-        <div class="empty-state"><div class="ico">⚠️</div><div class="t">读取失败</div>
+      detail.innerHTML = `<div class="section-title">${ico("search")} 事件序列</div>
+        <div class="empty-state"><div class="ico">${ico("warn")}</div><div class="t">读取失败</div>
         <div class="d">${esc(e.message || "未知错误")}</div></div>`;
       return;
     }
     const spans = rt.spans || [];
     const maxDur = spans.reduce((a, s) => Math.max(a, Number(s.dur_ms) || 0), 0) || 1;
     detail.innerHTML = `
-      <div class="section-title">🔍 ${esc(TRACE_KIND[rt.kind] || rt.kind)}
+      <div class="section-title">${ico("search")} ${esc(TRACE_KIND[rt.kind] || rt.kind)}
         <span class="num" style="color:var(--text-3);font-weight:400;">${esc(rt.run_id)}</span></div>
       <div class="panel-card" style="font-size:12.5px;">
         ${_traceTag(rt.status)} <span class="num">整轮 ${_fmtMs(rt.duration_ms)}</span>

@@ -340,7 +340,7 @@ function chartGantt(el, details) {
       // 此前 length-1-i 配 inverse 导致事件条与标签行错位
       data: [[it.start, i]],
       itemStyle: { color: it.accepted ? p.discharge : p.temp, opacity: 0.88, borderRadius: 6 },
-      tooltip: { formatter: () => `<b>${it.name}</b><br/>${it.accepted ? "✓ 接受" : "✗ 拒绝"} · 目标 ${it.target}kW · 实际 ${it.actual}kW<br/>完成率 ${it.rate.toFixed(0)}%` },
+      tooltip: { formatter: () => `<b>${it.name}</b><br/>${it.accepted ? ico("check") + " 接受" : ico("cross") + " 拒绝"} · 目标 ${it.target}kW · 实际 ${it.actual}kW<br/>完成率 ${it.rate.toFixed(0)}%` },
     })),
   });
 }

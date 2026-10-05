@@ -1,13 +1,15 @@
 /* ================= 主控：导航 / 求解循环 / 对话 / 上传 / 主题 ================= */
 
+/* 导航图标只写 ICONS 的键名（web/js/api.js），不再在两份之间抄一遍路径：
+   此前 NAV 里是一条独立的 path 串，注册表又抄了一份，改一处不会改另一处。 */
 const NAV = [
-  { id: "dashboard", label: "数据总览", icon: "M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z" },
-  { id: "scheduling", label: "充放电调度", icon: "M13 2L3 14h7l-1 8 11-13h-8l1-7z" },
-  { id: "forecast", label: "负荷预测", icon: "M3 3v18h18M7 14l4-4 3 3 5-6" },
-  { id: "thermal", label: "电池热管理", icon: "M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 1 1 4 0zM12 9v8" },
-  { id: "dr", label: "需求响应", icon: "M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.2-2 5.5-.6 1-.9 1.8-1 2.5h-8c-.1-.7-.4-1.5-1-2.5-.8-1.3-2-3.1-2-5.5a7 7 0 0 1 7-7zM9 21h6" },
-  { id: "traces", label: "运行追溯", icon: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2" },
-  { id: "settings", label: "系统设置", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7.5 7.5 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.5 7.5 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5a7.4 7.4 0 0 0 0 2.4l-2 1.5 2 3.5 2.4-1a7.5 7.5 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.5 7.5 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2z" },
+  { id: "dashboard", label: "数据总览", icon: "dashboard" },
+  { id: "scheduling", label: "充放电调度", icon: "bolt" },
+  { id: "forecast", label: "负荷预测", icon: "trend" },
+  { id: "thermal", label: "电池热管理", icon: "thermometer" },
+  { id: "dr", label: "需求响应", icon: "bulb" },
+  { id: "traces", label: "运行追溯", icon: "history" },
+  { id: "settings", label: "系统设置", icon: "gear" },
 ];
 
 /* 侧栏收起状态 → .app 轨道同步（兼容不支持 :has() 的浏览器内核） */
@@ -16,13 +18,14 @@ function syncSidebarTrack() {
   if (sb) $("#app").classList.toggle("sb-closed", sb.classList.contains("collapsed"));
 }
 
-// 思维链节点：全程只用 textContent。它是模型原文，一旦走 renderMarkdown/innerHTML
+// 思维链节点：正文全程只用 textContent。它是模型原文，一旦走 renderMarkdown/innerHTML
 // 就等于把"往页面里写标记"的能力交回了模型手上。
+// 唯一的 innerHTML 是 summary，内容 = 自家图标注册表的 SVG + 写死的中文，不含模型字节。
 function makeThinkNode(text) {
   const box = document.createElement("details");
   box.className = "chat-think";
   const sum = document.createElement("summary");
-  sum.textContent = "🧠 思考过程";
+  sum.innerHTML = `${ico("cpu")} 思考过程`;
   const pre = document.createElement("pre");
   pre.textContent = text || "";
   box.append(sum, pre);
@@ -38,6 +41,10 @@ const App = {
     if (localStorage.getItem("anim") === "0") document.documentElement.classList.add("no-anim");
     if (localStorage.getItem("compact") === "1") document.documentElement.classList.add("compact");
     this.renderThemeIcon();
+    // 静态 HTML（欢迎页 / 求解卡 / 对话栏 / 上传弹窗）里的 <i data-icon> 槽位在这里填成
+    // SVG。必须放在第一个受保护请求之前：/api/bootstrap 一失败（未登录 / 首次改密）
+    // 下面就 return 了，登录层和欢迎页仍然要有图标。
+    hydrateIcons();
     try {
       State.boot = await API.get("/api/bootstrap");
     } catch (e) {
@@ -237,7 +244,7 @@ const App = {
   renderNav() {
     $("#nav").innerHTML = NAV.map((n) => `
       <button class="nav-item ${State.page === n.id ? "active" : ""}" data-page="${n.id}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${n.icon}"/></svg>
+        ${ico(n.icon)}
         ${n.label}
       </button>`).join("");
     $$("#nav .nav-item").forEach((b) => b.addEventListener("click", () => this.showPage(b.dataset.page)));
@@ -269,7 +276,7 @@ const App = {
       if (e.status === 409) {
         sec.innerHTML = ""; // 等待求解 veil
       } else {
-        sec.innerHTML = `<div class="empty-state"><div class="ico">⚠️</div><div class="t">页面数据加载失败</div><div class="d">${esc(e.message)}</div><div style="margin-top:10px;"><button class="btn btn-sm" onclick="location.reload()">重试</button></div></div>`;
+        sec.innerHTML = `<div class="empty-state"><div class="ico">${ico("warn")}</div><div class="t">页面数据加载失败</div><div class="d">${esc(e.message)}</div><div style="margin-top:10px;"><button class="btn btn-sm" onclick="location.reload()">重试</button></div></div>`;
         console.error("[renderPage]", e);
       }
     }
@@ -340,7 +347,8 @@ const App = {
     this._lastPr = pr;
     if (pr.running) {
       this.showVeil(true);
-      $("#solve-label").textContent = pr.label || "运行中…";
+      // iconize：进度标签来自后端（"✅ 全部智能体执行完毕"），状态字符在呈现层换成同一套描边图标
+      $("#solve-label").innerHTML = iconize(pr.label || "运行中…");
       $("#solve-fill").style.width = (pr.percent || 3) + "%";
       this.renderStages(pr.percent);
       State.solving = true;
@@ -348,23 +356,23 @@ const App = {
       if (this._solveStart == null) this._solveStart = Date.now();
       const el = Math.floor((Date.now() - this._solveStart) / 1000);
       const tm = $("#solve-timer");
-      if (tm) tm.textContent = `⏱ ${String(Math.floor(el / 60)).padStart(2, "0")}:${String(el % 60).padStart(2, "0")}`;
+      if (tm) tm.innerHTML = `${ico("clock")} ${String(Math.floor(el / 60)).padStart(2, "0")}:${String(el % 60).padStart(2, "0")}`;
       // 📝 实时日志：步骤文本变化即记录一行
       const lbl = pr.label || "运行中…";
       if (lbl !== this._lastLogLbl) {
         this._lastLogLbl = lbl;
         (this._logs = this._logs || []).push(`[${new Date().toTimeString().slice(0, 8)}] ${lbl}`);
         const lg = $("#solve-log");
-        if (lg) { lg.innerHTML = this._logs.slice(-8).map((l) => `<div>${esc(l)}</div>`).join(""); lg.scrollTop = lg.scrollHeight; }
+        if (lg) { lg.innerHTML = this._logs.slice(-8).map((l) => `<div>${iconize(l)}</div>`).join(""); lg.scrollTop = lg.scrollHeight; }
       }
       // 底部系统状态栏（只展示真实可得信息，不编造 CPU/内存）
       const st = $("#solve-status");
       if (st && State.boot) {
         const di = State.boot.data_info || {};
         const llm = State.boot.llm || {};
-        st.innerHTML = `<span>🤖 当前模型: <b>${esc(llm.model || "—")}</b></span>` +
-          `<span>📊 数据来源: <b>${di.is_custom ? `自定义数据 ${di.rows} 条` : "内置演示数据"}</b></span>` +
-          `<span>📈 进度: <b>${pr.percent || 0}%</b></span>`;
+        st.innerHTML = `<span>${ico("bot")} 当前模型: <b>${esc(llm.model || "—")}</b></span>` +
+          `<span>${ico("bars")} 数据来源: <b>${di.is_custom ? `自定义数据 ${di.rows} 条` : "内置演示数据"}</b></span>` +
+          `<span>${ico("trend")} 进度: <b>${pr.percent || 0}%</b></span>`;
       }
     } else if (pr.done && State.solving) {
       State.solving = false;
@@ -414,7 +422,7 @@ window.__showLogin = function () {
   const dlg = document.createElement("dialog");
   dlg.id = "login-veil";
   dlg.innerHTML = `
-    <div class="login-logo">⚡</div>
+    <div class="login-logo">${ico("bolt")}</div>
     <div class="login-title">储能调度系统</div>
     <div class="login-sub">请登录以继续（JWT 会话 · 12小时有效）</div>
     <div class="field"><label for="login-user">用户名</label><input id="login-user" autocomplete="username" value="admin"></div>
@@ -474,7 +482,7 @@ window.__requireChangePassword = function (prefillOld) {
   const dlg = document.createElement("dialog");
   dlg.id = "pwd-veil";
   dlg.innerHTML = `
-    <div class="login-logo">🔐</div>
+    <div class="login-logo">${ico("lock")}</div>
     <div class="login-title">请先修改初始口令</div>
     <div class="login-sub">首次登录（或口令为初始值）时，除改密外的接口一律 403。</div>
     <div class="field"><label for="pw-old">原口令</label><input id="pw-old" type="password" autocomplete="current-password"></div>
@@ -544,8 +552,8 @@ Object.assign(App, {
     if (cur === -1) cur = stages.length - 1;
     $("#solve-stages").innerHTML = stages.map(([p, label], i) => {
       const st = pct >= p ? "done" : i === cur ? "cur" : "todo";
-      const ico = st === "done" ? "✓" : st === "cur" ? "▶" : "○";
-      return `<div class="tl-item ${st}"><span class="tl-ico">${ico}</span><b>${esc(label)}</b></div>`;
+      const mark = st === "done" ? ico("check") : st === "cur" ? ico("play") : ico("circle");
+      return `<div class="tl-item ${st}"><span class="tl-ico">${mark}</span><b>${esc(label)}</b></div>`;
     }).join("");
     const det = $("#solve-detail");
     if (det) det.textContent = descs[cur];
@@ -566,8 +574,10 @@ Object.assign(App, {
   },
   renderDataCaption() {
     const di = State.boot.data_info;
-    $("#sb-data-caption").textContent = di.is_custom
-      ? `✅ 已加载 ${di.rows} 条 · ${di.days} 天`
+    // innerHTML 而不是 textContent：这里带自家图标。textContent 会把 <svg> 源码
+    // 原样打印成一行文字（之前 lexer 替换后就出过这个现象）。数字来自 /api/bootstrap。
+    $("#sb-data-caption").innerHTML = di.is_custom
+      ? `${ico("check")} 已加载 ${Number(di.rows) || 0} 条 · ${Number(di.days) || 0} 天`
       : "使用内置演示数据 · 上传后自动切换";
   },
 
@@ -580,7 +590,7 @@ Object.assign(App, {
     const box = $("#chat-msgs");
     box.innerHTML = State.chatHistory.slice(-16).map((m) => `
       <div class="msg ${m.role === "user" ? "user" : "bot"}">
-        <div class="avatar">${m.role === "user" ? "🙋" : "🤖"}</div>
+        <div class="avatar">${m.role === "user" ? ico("user") : ico("bot")}</div>
         <div class="bubble">${m.role === "user" ? esc(m.content) : renderMarkdown(m.content)}</div>
       </div>`).join("");
     box.scrollTop = box.scrollHeight;
@@ -600,7 +610,7 @@ Object.assign(App, {
     // 用户刚手动展开的思考过程会在下一个 token 被折叠回去。
     const holder = document.createElement("div");
     holder.className = "msg bot";
-    holder.innerHTML = `<div class="avatar">🤖</div><div class="bubble">
+    holder.innerHTML = `<div class="avatar">${ico("bot")}</div><div class="bubble">
       <div class="chat-aux" style="display:none;"></div>
       <div class="chat-main"><span class="spinner" style="display:inline-block;vertical-align:-4px;"></span> 思考中…</div>
     </div>`;
@@ -661,18 +671,18 @@ Object.assign(App, {
           }
           if (typeof pl.notice === "string" && pl.notice) {
             aux.style.display = "";
-            aux.textContent = "⚠️ " + pl.notice;
+            aux.innerHTML = ico("warn") + " " + esc(pl.notice);
           }
           if (typeof pl.heartbeat === "number") {
             // 工具在跑 MILP（实测单次求解 p50 49.7 s），这段时间一个 token 都没有
             aux.style.display = "";
-            aux.textContent = `⏳ 正在执行工具/求解，已等待 ${pl.heartbeat.toFixed(0)} s…`;
+            aux.innerHTML = ico("clock") + ` 正在执行工具/求解，已等待 ${pl.heartbeat.toFixed(0)} s…`;
           }
           if (pl.done) { gotDone = true; if (pl.history) State.chatHistory = pl.history; }
         }
       }
     } catch (e) {
-      if (!acc) acc = `⚠️ 对话失败：${e.message}`;
+      if (!acc) acc = `${ico("warn")} 对话失败：${e.message}`;
     }
     if (!gotDone) {
       State.chatHistory.push({ role: "assistant", content: acc || "（无响应）" });
@@ -703,7 +713,7 @@ Object.assign(App, {
   async doUpload(file) {
     const resBox = $("#upload-result");
     resBox.className = "upload-msg busy";
-    resBox.textContent = "⏳ 正在解析文件…";
+    resBox.innerHTML = ico("clock") + " 正在解析文件…";
     // 兜底 try/catch——此前网络断/401/5xx 时 unhandled rejection，
     // 弹窗永久卡在"解析中…"假死
     try {
@@ -722,7 +732,7 @@ Object.assign(App, {
       }
     } catch (e) {
       resBox.className = "upload-msg err";
-      resBox.textContent = "⚠️ " + e.message;
+      resBox.innerHTML = ico("warn") + " " + esc(e.message);
       toast("上传失败：" + e.message, "err");
     }
   },
@@ -748,9 +758,11 @@ Object.assign(App, {
     requestAnimationFrame(() => setTimeout(() => this.renderPage(State.page, true), 60));
   },
   renderThemeIcon() {
+    // 路径不再抄第二份：sun/moon 与 ICONS 里逐字相同（当初就是从这里复制的）。
+    // 顶栏要的是强调色，所以用 ico() 的第二个参数挂 .ico-accent，由 CSS 覆盖 stroke。
     $("#btn-theme").innerHTML = State.theme === "light"
-      ? `<svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+      ? ico("sun", "ico-accent")
+      : ico("moon", "ico-accent");
   },
 });
 

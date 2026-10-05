@@ -3,6 +3,64 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（SemVer）。
 唯一版本号来源：`src/__init__.py` 的 `__version__`。
 
+## [1.2.0] - 2026-10-05
+
+一次**图标口径统一**：页面里的 emoji 与各处手写的 inline SVG，换成侧栏那套描边图标
+（24 网格 / `stroke-width: 1.8` / 圆角端点 / `currentColor`），尺寸一律由所在容器的
+`font-size` 决定。SemVer 取 minor：纯前端呈现层改动，API、模型、求解结果均未变。
+
+### 新增（Added）
+
+- **图标单一事实来源** `web/js/api.js`：`ICONS`（57 个键）+ `ico(name)` + `hydrateIcons()`。
+  JS 模板里写 `${ico("x")}`（133 处：`pages.js` 109 / `app.js` 22 / `charts.js` 2），
+  静态 HTML 里写 `<i class="ico-slot" data-icon="x"></i>`（`index.html` 26 处），
+  由 `App.boot()` 填。`hydrateIcons()` 必须排在第一个受保护请求之前——`boot()` 在
+  `/api/bootstrap` 失败时会提前 `return`，填晚了登录层与欢迎页的图标会整块缺席。
+  `ico()` 认不出的名字返回空串，不会漏出半个 emoji。
+- **槽位属性名是 `data-icon`，不是 `data-i`**：`makeTabs()`（api.js 的页内 tab 工厂）早就把
+  `data-i="${i}"` 当页签序号用了。全局选择器 `[data-i]` 会连它一起选中，`ico("0")` 认不出来
+  返回空串 ⇒ 页签文字被 `innerHTML=""` 抹平。这一条是改名后现场用一个 `makeTabs` 容器验的：
+  改名前页签标签会被清掉，改名前后标签文本一致、26 个槽位照常填充。
+- **`iconize(text)`**：后端文案里仍带状态字符（`backend/server.py` 的进度标签
+  "✅ 全部智能体执行完毕"、热管理页 DR 校验表的 "✅ 通过（温升…）/❌ 驳回（预计超温…）"、
+  `src/agents/chat_agent.py` 的回答）。改后端会牵动测试与文档引用的原文，所以只在呈现层
+  就地替换：先 `esc()` 再按表换成注册表图标。**本条列的落点与映射在 1.2.1 里被补全过**——
+  当时漏了 `server.py:246-251` 六个以 `✓` 开头的阶段标签，也没接对话气泡与 toast，见上一节。
+- **`NAV` 与顶栏/侧栏原有的三枚手写 SVG 收进注册表**：`NAV` 的 7 个 `icon` 改成键名
+  （`renderNav()` 走 `ico(n.icon)`），`folderPlus` / `panelLeft` / `sun` / `moon` 的路径
+  逐字搬进 `ICONS`，不再是"复制一份"。顶栏主题开关要固定强调色，用 `ico(name, "ico-accent")`
+  挂类，由 `.ico-accent{stroke:var(--accent)}` 覆盖 `stroke="currentColor"` 呈现属性。
+
+### 变更（Changed）
+
+- **代码路径里的 emoji 清零**（扫描 5 个 js + `index.html` + `app.css`，剔除注释后 0 处）：
+  `🤖 📊 📈 🌡️ 📡 ⚙️ 🧠 🧭 📝 ⏱ ⏳ ⚠️ ✅ ❌ 🚫 ⚪ 🗑️ ⬇ ✕ ＋ ⊕ ◉ ▸ ▼ ℹ️ 🙋 🙈 👁 🚀 📁` 等。
+  正文里的排版符号（`→ ↑ ↓ ≤ ∈ ℃ −`）按原样保留——它们是文字不是图标，换成 SVG 只会让行高抖一下。
+- **`.ai-expander > .head` 由 `space-between` 改 `flex-start` + `gap:6px`**：head 现在是
+  [图标][文字][箭头] 三个 flex 项，`space-between` 会把图标与文字各推一端、中间拉出一条空白；
+  箭头改由 `.chev-inline{margin-left:auto}` 靠右。
+- **`.panel-title` 加 `gap:7px`**：emoji 时代图标与标题之间靠一个空格，换成 SVG 后那个空格在
+  flex 容器里被吃掉，两者会贴在一起。
+- **`.dz-icon` 补 `font-size:24px`**：尺寸原来写死在 `svg` 的 `width/height` 上，统一走 `1em` 后由容器给。
+- **折叠标记可转向**：`details[open] > .formula-sum svg` 转 90°、`.ai-expander.open > .head .chev-inline svg`
+  转 180°（字符箭头做不到这件事）；两条 `transition` 受 `html.no-anim` 管辖。
+- 缓存位 `?v=` 随 `__version__` 1.1.0 → 1.2.0（`test_web_assets.py::test_cache_buster_matches_version` 钉住；
+  不升的话旧 `app.js` 会继续吃缓存，这次改动对老用户不可见）。
+
+### 未动（Out of scope）
+
+- **品牌标记三处 + 顶栏那枚双色机器人**：侧栏 `.brand-logo`、欢迎页 `.wl-logo`（同为 36 网格、
+  白浪+黄闪电双填色）与 `#btn-chat` 的 `stroke="var(--accent)"` + 两个实心眼点。它们不是行内图标，
+  拉进 `currentColor` 描边体系会丢掉品牌色；实测全页 `svg:not(.ico)` 就剩这三处。
+- **对话气泡正文**：`chat_agent.py` 生成的 "✅ 全天正常 / ⚠️ 触发降额 / 🛑 超温" 出现在 LLM/规则回答里，
+  要经过 `renderMarkdown` 才能替换，风险是把模型输出里的字符也当图标处理；本轮没接（1.2.1 接了，
+  代价见那节：行内代码里的 emoji 也会一起换）。
+- **注释里的 emoji**（`app.js:352` 的 `// 📝`、`api.js` 的 `TEXT_ICON` 表尾注释等）保留：
+  它们不进 DOM，且是"这一行原本画什么"的线索。判据是"代码路径 0 处"，扫描时剔除整行与行尾注释。
+- **`.status-tag` 的形状双重编码**（`::before` 色块 + 文字）不改：接受/拒绝单元格现在同时有色块和
+  图标，与原 emoji 版的信息量一致，只是图形换成了描边；要去掉色块是另一件事。
+- 排版符号 `→ ↑ ↓ ≤ ∈ ℃ −` 与序号 `①②③④` 保留。
+
 ## [1.1.0] - 2026-09-20
 
 一次**口径改版**：把"广东峰谷电价"从五套互相矛盾的自拟时段（含前端下载模板里内联的一套），换成有正式文件出处的
