@@ -102,6 +102,25 @@ function hydrateIcons(root) {
         对话气泡与 AI 决策解释（经 renderMarkdown 的 inline 管线）。 */
 const TEXT_ICON = [
   /* 求解进度：backend/server.py:246-251 六个阶段标签全部以 ✓ 开头 */
+  [/\u{2713}|\u{2714}/gu, "check"],                                   // ✓ ✔
+  [/\u{2717}|\u{2718}/gu, "cross"],                                   // ✗ ✘
+  [/\u{2705}\u{FE0F}?/gu, "check"],                                   // ✅
+  [/\u{274C}\u{FE0F}?/gu, "cross"],                                   // ❌
+  [/\u{26A0}\u{FE0F}?/gu, "warn"],                                    // ⚠️
+  [/\u{26D4}/gu, "ban"],                                              // ⛔
+  [/\u{1F6D1}/gu, "ban"],                                             // 🛑
+  [/\u{26AA}/gu, "circle"],                                           // ⚪
+  /* 规则模式对话（src/agents/chat_agent.py）每条答案的行首标记 */
+  [/\u{23F0}\u{FE0F}?|\u{23F3}|\u{23F1}\u{FE0F}?/gu, "clock"],        // ⏰  ⏱️
+  [/\u{1F4A1}/gu, "info"],                                            // 💡 提示语义（bulb 归需求响应）
+  [/\u{1F4CA}/gu, "bars"],                                            // 📊
+  [/\u{1F4C8}/gu, "trend"],                                           // 📈
+  [/\u{1F321}\u{FE0F}?/gu, "thermometer"],                            // 🌡️
+  [/\u{1F4E1}/gu, "bulb"],                                            // 📡 与侧栏「需求响应」同图形
+  [/\u{1F504}/gu, "refresh"],                                         // 🔄
+  [/\u{1F50D}/gu, "search"],                                          // 🔍
+  [/\u{1F916}/gu, "bot"],                                             // 🤖
+  [/\u{1F4CB}/gu, "clipboard"],                                       // 📋
 ];
 function applyTextIcons(escaped) {
   let h = escaped;
@@ -219,7 +238,8 @@ function fmtPct(v) { return `${v.toFixed(1)}%`; }
 function toast(msg, type = "") {
   const el = document.createElement("div");
   el.className = `toast ${type}`;
-  el.textContent = msg;
+  /* iconize = 先 esc 再换图标：toast 里会出现后端串（pr.warning 的 "⚠️ DR事件时间重叠…"） */
+  el.innerHTML = iconize(msg);
   $("#toasts").appendChild(el);
   setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity .3s"; setTimeout(() => el.remove(), 320); }, 3400);
 }

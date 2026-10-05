@@ -87,6 +87,7 @@ body {
 .kpi-card, .panel-card, .chart-card, .table-wrap, .topbar, .sidebar, .chatpanel,
 .sb-btn, .btn, .icon-btn, .dropzone, .nav-item, dialog, .toast, .agent-card,
 .op-bar, .solve-card, .info-note, .empty-state, .price-card, .feas-item,
+.mp-grid3, .sch-grid,
 .dtable th, .dtable td, .subtab, .msg .bubble {
   transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
 }
@@ -286,6 +287,9 @@ details[open] > .formula-sum svg { transform: rotate(90deg); }
   border-radius: 9px; font-size: 13px; font-weight: 600;
   padding: 8px 16px; border: 1px solid var(--border);
   background: var(--bg-card); color: var(--text-1);
+  /* 中文按钮可以在字与字之间断行：三列布局里「＋ 添加模型」被挤成竖排一字一行。
+     按钮是行内控件，宁可让它把同行输入框挤窄，也不要自己换行。 */
+  white-space: nowrap;
   transition: all 0.16s ease;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -342,6 +346,12 @@ details[open] > .formula-sum svg { transform: rotate(90deg); }
 .metric-row:last-child { border-bottom: none; }
 .metric-label { color: var(--text-3); }
 .metric-value { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 电价时段行（设置页）：档名 pill 顶对齐，多档时间一行一档。
+   原来整串 "08:00-10:00, 12:00-14:00, 19:00-24:00" 在窄列里会从中间断开成
+   "19:00-" / "24:00"，读起来像被截断的数。 */
+.pp-row { align-items: flex-start; }
+.pp-row .metric-label { flex: none; padding-top: 2px; }
+.pp-row .metric-value { text-align: right; line-height: 1.8; }
 
 /* ---------- 图表卡 ---------- */
 .chart-card {
@@ -381,6 +391,8 @@ html[data-theme="light"] .val-good-cut { color: var(--success); }
 .status-tag {
   display: inline-block; padding: 2px 10px 2px 21px; border-radius: 999px;
   font-size: 11px; font-weight: 600; position: relative;
+  /* 两字档名（平段/尖峰）在窄列里会竖排成"圆形"，pill 就不该在字间断行 */
+  white-space: nowrap;
 }
 .status-tag::before {
   content: ""; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
@@ -659,6 +671,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px); 
   background: var(--bg-input); border: 1px solid var(--border);
   color: var(--text-1); border-radius: 8px; padding: 8px 11px;
   font-size: 13px; outline: none; width: 100%;
+  /* grid/flex 项的自动最小尺寸是 min-content：不加这条，select 撑破轨道而不是裁文字 */
+  min-width: 0;
   transition: border-color 0.15s ease;
 }
 .field input:focus, .field select:focus { border-color: var(--accent); }
@@ -685,7 +699,7 @@ input[type="range"]::-webkit-slider-thumb {
   background: var(--accent); cursor: pointer;
   box-shadow: 0 0 8px var(--accent-glow); border: 2px solid var(--bg-card);
 }
-.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; padding: 4px 0; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; padding: 4px 0; white-space: nowrap; }
 .check input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 /* ---------- 电价卡片 ---------- */
@@ -868,13 +882,19 @@ dialog.ui-confirm { width: min(440px, 90vw); }
 .btn-add-green { background: #16a34a; color: #fff; border: none; }
 .btn-add-green:hover { background: #128a3e; color: #fff; }
 .mp-grid3 {
-  display: grid; gap: 14px;
+  display: grid; gap: 14px; align-items: start;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.mp-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; height: 100%; }
-.mp-col > .panel-card:last-child { flex: 1; }
-.mp-duo { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; }
-.panel-title { display: flex; align-items: center; }
+/* 列不再 height:100%、末卡不再 flex:1 —— 那两条等于强制三列等高，结果内容最短的
+   「编辑供应商」在超时输入框下面留出一整块空洞。改成贴内容高度：底部不齐是这种
+   三列设置页的正常样子，比卡片里挖空好。 */
+.mp-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* API Key 与格式两栏：auto-fit + 200px 下限，够宽两栏、不够自动叠成两行。
+   原来固定 1.2fr/1fr，格式栏被压到 66px 可用宽（option 全文 223px），
+   下拉直接裁成 "OpenAI 兼"；现在显示走短标签 + 下方 hint 给端点路径，
+   轨道本身也不再低于一个能放下短标签的宽度。 */
+.mp-duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.panel-title { display: flex; align-items: center; gap: 7px; }
 .panel-title .chev { margin-left: auto; color: var(--text-3); font-size: 9px; font-weight: 400; }
 .mp-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
 .mp-danger {
@@ -906,20 +926,27 @@ dialog.ui-confirm { width: min(440px, 90vw); }
 }
 /* ---------- 调度参数面板：三卡并排 + 卡内紧凑网格 ---------- */
 .sch-grid {
-  display: grid; gap: 14px;
+  display: grid; gap: 14px; align-items: start;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.sch-grid > .panel-card { height: 100%; }
+/* 原来 .sch-grid > .panel-card { height:100% } 让三张卡强制等高：
+   电池参数（内容最短）下面留 ~580px 空白，优化选项留 ~320px。等高换成贴内容。 */
 @media (max-width: 1180px) {
   .sch-grid { grid-template-columns: 1fr; }
 }
 /* 滑杆 2 列网格（最低SOC+最高SOC 一行，额定功率第二行） */
 .bat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+/* 三个滑块配两列 ⇒ 第三行只有「额定功率」，右半格空着、滑块还被裁成半宽。
+   让它横跨两列：行不再残缺，滑轨也更长（额定功率 500~2000 步进 100，半宽不好点准）。 */
+.bat-grid > .field:last-child { grid-column: 1 / -1; }
 /* 只读参数 2×2 网格 */
 .ro-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; margin-top: 10px; }
 .ro-grid .metric-row { border-bottom: none; padding: 3px 0; }
-/* 优化选项复选框 2×2 */
-.opt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+/* 优化选项复选框：设计意图是 2×2 一块。
+   原来固定两列，窄列里「XGBoost负荷预测」被折成两行、与旁边单行项高低不齐；
+   改成 auto-fit + 150px 下限并限宽 320px：≥320px 恒两列（2×2），更窄自动退成一列，
+   配合 .check 的 nowrap 保证标签不在字间断行。 */
+.opt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 12px; max-width: 320px; }
 /* 编排引擎按钮限宽（约 350px），选项卡化 */
 .eng-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 360px; }
 

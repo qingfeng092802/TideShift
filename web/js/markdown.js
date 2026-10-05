@@ -19,7 +19,11 @@ function renderMarkdown(src) {
   const out = [];
   let i = 0;
 
-  const inline = (s) => s
+  /* 状态字符 → 描边图标（api.js 的 TEXT_ICON）。放在行内变换最前面：
+     此刻串里还没有标签，替换值不会与链接/加粗的正则互相干扰；
+     万一 URL 里真有 emoji，代价是那条链接退化成纯文本，而不是产出坏标记。
+     代价：行内代码 `✅` 里的 emoji 也会一起换成图标——本项目对话里不出现代码块图例，可接受。 */
+  const inline = (s) => applyTextIcons(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")

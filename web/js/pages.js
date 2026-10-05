@@ -760,6 +760,16 @@ async function _renderSettings(root) {
   const edit = mp.providers.find((x) => x.id === (State.mpEditId || mp.active_id)) || mp.providers[0];
   State.mpEditId = edit.id;
   const fmtOptions = ["OpenAI 兼容 (/v1/chat/completions)", "Anthropic Messages (/v1/messages)"];
+/* 下拉只显示短名，option 的 value 仍是整串：backend/server.py:1541 用 `"Anthropic" in api_format`
+   判分支、model_config_service.py:27 的默认值也是整串，所以改的是显示不是契约。
+   整串留在 title 上，端点路径单独用一行 hint 显示——原来 223px 的串塞进 ~174px 的轨道，
+   被裁成 "OpenAI 兼"，等于把用户唯一能核对接口形态的信息裁掉了。 */
+const FMT_SHORT = {
+  "OpenAI 兼容 (/v1/chat/completions)": "OpenAI 兼容",
+  "Anthropic Messages (/v1/messages)": "Anthropic Messages",
+};
+const fmtShort = (f) => FMT_SHORT[f] || f;
+const fmtPath = (f) => { const m = /\(([^)]+)\)/.exec(String(f || "")); return m ? m[1] : ""; };
   root.innerHTML = `
     <div class="settings-layout">
       <aside class="set-nav">
@@ -793,7 +803,8 @@ async function _renderSettings(root) {
                   <div class="pw-wrap"><input type="password" id="mp-key" value="" placeholder="${edit.has_key ? "留空保持不变" : "输入 API Key"}"><button type="button" class="pw-eye" id="mp-eye" title="显示/隐藏">${ico("eye")}</button></div>
                   <div class="field-hint" id="mp-key-hint">${edit.has_key ? "已配置 " + esc(edit.api_key_masked || "****") : "尚未配置"}</div></div>
                 <div class="field"><label>格式</label>
-                  <select id="mp-fmt">${fmtOptions.map((f) => `<option ${f === edit.api_format ? "selected" : ""}>${f}</option>`).join("")}</select></div>
+                  <select id="mp-fmt">${fmtOptions.map((f) => `<option value="${esc(f)}" title="${esc(f)}" ${f === edit.api_format ? "selected" : ""}>${esc(fmtShort(f))}</option>`).join("")}</select>
+                  <div class="field-hint">${esc(fmtPath(edit.api_format) || "接口路径随所选格式")}</div></div>
               </div>
               <div class="field" style="margin-top:10px;"><label>超时 (秒) (5-180)</label><input type="number" id="lp-timeout" min="5" max="180" step="5" value="${lp.timeout}"></div>
             </div>
@@ -810,9 +821,9 @@ async function _renderSettings(root) {
                       <label class="switch"><input type="checkbox" data-model="${esc(m)}" ${enabled ? "checked" : ""}><span class="track"></span></label></div>`;
                   }).join("")}
                 </div>
-                <div style="display:flex;gap:8px;margin-top:10px;">
-                  <input type="text" id="mp-new-model" placeholder="如：glm-4.7" style="flex:1;background:var(--bg-input);border:1px solid var(--border);color:var(--text-1);border-radius:8px;padding:7px 11px;font-size:12.5px;outline:none;">
-                  <button class="btn btn-sm" id="mp-add-model">＋ 添加模型</button>
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                  <input type="text" id="mp-new-model" placeholder="如：glm-4.7" style="flex:1 1 110px;min-width:0;background:var(--bg-input);border:1px solid var(--border);color:var(--text-1);border-radius:8px;padding:7px 11px;font-size:12.5px;outline:none;">
+                  <button class="btn btn-sm" id="mp-add-model">${ico("plus")} 添加模型</button>
                 </div>
               </div>
               <div class="panel-card">
@@ -892,7 +903,7 @@ async function _renderSettings(root) {
           <div class="field"><label>低谷 (元/kWh)</label><input type="number" id="price-valley" min="0" step="0.00001" value="${p.price_valley}"></div>
         </div>
         <div style="margin-top:10px;">
-          ${(engineCfg().price_periods || []).map((pp) => `<div class="metric-row"><span class="metric-label"><span class="status-tag ${pp.cls}">${pp.name}</span></span><span class="metric-value">${pp.hours}</span></div>`).join("")}
+          ${(engineCfg().price_periods || []).map((pp) => `<div class="metric-row pp-row"><span class="metric-label"><span class="status-tag ${esc(pp.cls)}">${esc(pp.name)}</span></span><span class="metric-value">${esc(pp.hours).replace(/,\s*/g, "<br>")}</span></div>`).join("")}
         </div>
         <div class="caption" style="margin-top:8px;">${ico("bulb")} 时段划分与生效月份来自粤发改价格〔2021〕331 号，由引擎下发（<code>PRICE_PERIODS</code>）；这里只改价格数值。</div>
       </div>
