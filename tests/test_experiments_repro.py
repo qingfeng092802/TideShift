@@ -10,7 +10,7 @@
 """
 # 补于 2026-10-04：此前 README 五个 headline 数字在 tests/ 里命中 0，
 # 意味着改了物理常数 / 离散步长 / SOC 权重系数都会静默变错。
-# 本测试把它们钉住。见 docs/quality_review_batch3_2026-10-03.md §H-06。
+# 本测试把它们钉住。复现路径与口径见 docs/experiments.md §复现脚本。
 import os
 import sys
 
