@@ -372,6 +372,8 @@ SemVer 取 minor：新增 `data/README.md` 溯源与 `tests/test_price_calendar.
 ### 验证（Release gate）—— CI 全量已跑通（Run 35496788350，`70ea9ae`）
 
 - **CI 才是本仓库的发版标准口径**，`v1.1.0` 标签打在被 CI 验证过的那个 commit（`70ea9ae`）上：
+  **SHA 记账**：2026-10-07 那次改写使本条目与上一节标题里的 `70ea9ae` 在当前历史中不可达，
+  同一棵树的现用 SHA 是 `63ddd2b`，`v1.1.0` 标签即打在其上（两者时间戳与 tree 逐字节相同）。
   `full-tests` **`277 passed, 1 warning in 796.12 s`**（job 整跑 836 s，覆盖率 82% =
   6650 stmts / 1217 miss）、`fast-tests` **`244 passed, 33 deselected in 50.45 s`**
   （push 触发 Run 35478561322，job 含装依赖 92 s）。本机自查同步为快测 68 ~ 93 s、全量 832 s。
