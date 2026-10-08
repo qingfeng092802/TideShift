@@ -49,7 +49,7 @@ config/
 .env
 .env.*
 !.env.example
-# 本机启动包装会 set 明文口令，绝不能进历史（进过一次就得 rewrite history 才干净）
+# 本机启动包装可能含口令，一律不入库；被跟踪的 start_web.bat 内不得写口令
 start_web.local.bat
 *.local.bat
 
