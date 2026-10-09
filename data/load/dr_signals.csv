@@ -1,0 +1,3 @@
+﻿start_time,end_time,target_reduction_kw,subsidy_per_kwh,type
+2024-07-30 15:00:00,2024-07-30 17:00:00,472.84779894778984,0.8,peak_shaving
+2024-07-21 10:00:00,2024-07-21 11:00:00,582.6556363468916,0.8,peak_shaving

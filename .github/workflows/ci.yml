@@ -1,0 +1,88 @@
+# CI——单元/集成测试（PR 触发，跳过 slow）；nightly 全量 + 覆盖率
+# python-version 与 requirements.lock 的生成环境
+#   （Python 3.13.x）和 .python-version 统一。此前三者口径不一致：
+#   声明 3.11 / lock 在 3.13 上生成 / 实测环境为 3.13。
+#   注：3.11 下的兼容性本次未验证，如需支持 3.11 请先跑通本 CI。
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 18 * * *"   # 每日 UTC 18:00（北京 02:00）全量
+  # 手动触发：**发布前的全量回归**（含 slow）由这个入口跑。
+  # 加它的原因：全量原先只在 nightly 定时跑，本机又因受限沙箱跑不了 pytest，
+  # 于是"标准入口全绿"没有可复现的出口。现在可在 Actions 页面一键跑全量。
+  workflow_dispatch:
+
+jobs:
+  fast-tests:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest            # pytest.ini 默认 -m "not slow"
+
+  full-tests:
+    # 定时（nightly）与手动触发时跑全量（含 slow），作为发版前的标准回归入口
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      # 只跑一遍：原先这里先 `pytest -m ""` 再 `coverage run -m pytest -m ""`，
+      # 实测两步各 846 / 844 s，job 总时长 1732 s 里近一半是把 247 项重跑一遍。
+      # 覆盖率本来就是在一次运行里插桩采集的，第二遍不产生任何新证据。
+      # 计时口径注意：文档里引用的 846 s 是**合并前**那次运行的
+      # `pytest -m ""` 单步数字；合并成一句后这一步含 coverage 开销，数字会变。
+      # 这里**不能再写 `-q`**：pytest.ini 的 addopts 已经带了一个 `-q`，命令行再加一个就是
+      # `-qq`，pytest 会连"N passed in Xs"那行汇总一起吞掉——这道门槛的自报计数与计时
+      # 就全丢了，只剩四行进度的圆点（只能靠数圆点确认 277）。
+      # 上面的 fast-tests 写的是裸 `pytest`，所以它一直有汇总行。
+      - run: coverage run -m pytest -m "" && coverage report
+
+  llm-eval:
+    # 真实模型评测（`--mode llm`）：nightly 跑，也允许手动触发——否则刚配好
+    # secret 那天没法验证它通不通，只能干等 UTC 18:00 那班。
+    # 而且**必须仓库里配了 Secrets.DEEPSEEK_API_KEY 才跑**；没配就明确跳过并留一条
+    # notice——绝不用一个"看起来跑过了"的绿勾冒充测过。
+    #
+    # 指标**不做门禁**：入库基线是规则模式那一份，跨模式分母不同、且真实模型的
+    # 数字随采样浮动（见 evals/README.md 的"回归门禁"）。这个 job 变红只意味着
+    # 接口/凭据/流程本身坏了（401、超时、用例异常），那才是要人看的。
+    # 成本口径：deepseek-flash 一轮 35 例、约 16.5 万 token、6 分钟——手动触发同样烧这份。
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: 未配置 DEEPSEEK_API_KEY —— 跳过，不假装跑过
+        if: env.DEEPSEEK_API_KEY == ''
+        run: |
+          echo "::notice::DEEPSEEK_API_KEY 未配置，真实模型评测跳过（规则模式评测由 full-tests 覆盖）"
+      - name: 真实模型评测
+        if: env.DEEPSEEK_API_KEY != ''
+        run: python -m evals.run_eval --mode llm --model deepseek-flash
+      - name: 报告存档（供人看漂移，不做门禁）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-eval-report
+          path: evals/reports/llm-latest.*
+          if-no-files-found: ignore

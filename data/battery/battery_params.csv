@@ -1,0 +1,14 @@
+﻿parameter,value
+rated_power_kw,1000.0
+rated_capacity_kwh,2000.0
+soc_min,0.2
+soc_max,0.9
+charge_efficiency,0.95
+discharge_efficiency,0.95
+thermal_capacity_kj_k,15000.0
+thermal_resistance_k_w,0.001
+internal_resistance_ohm,0.018
+temp_normal_max,45.0
+temp_safe_max,55.0
+cycle_life,6000.0
+battery_cost_per_kwh,800.0

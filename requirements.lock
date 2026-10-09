@@ -1,0 +1,132 @@
+# ==============================================================================
+# 汐储 TideShift · 完整依赖锁文件（直接依赖 + 传递依赖）
+# ------------------------------------------------------------------------------
+# 用途：把整棵依赖树的每个包钉到具体版本，供 CI / 生产环境逐版本复现。
+# 安装：pip install -r requirements.lock
+
+# 生成方式：以「实测精确版本」为输入跑一次完整解析，再取解析结果落盘：
+#     pip install --dry-run --report report.json -r <实测精确 pin 文件>
+#   直接依赖区块的版本随后与实测 pin 逐条校验一致（校验脚本见仓库维护记录）。
+# 生成环境：Python 3.13.14 · Windows 10 · 索引 mirrors.cloud.tencent.com/pypi/simple
+# 生成日期：2026-09-16 · 共 76 个包（直接依赖 20 + 传递依赖 56）
+
+# 为什么不含 hash：
+#   本项目跨平台（Windows / Linux / macOS）。pip 的 hash 校验要求为每个平台的每个 wheel
+#   单独记录 hash，锁文件会膨胀数倍且无法跨平台使用。如需 hash 级校验，请在目标平台生成：
+#       pip download -r requirements.txt -d ./wheels
+#       pip hash ./wheels/*  （或使用 pip-tools: pip-compile --generate-hashes）
+
+# 维护约定：
+#   1. 直接依赖区块的版本必须与 requirements.txt 的下界保持一致；
+#   2. 传递依赖区块由解析结果生成，请勿手工修改；
+#   3. 更新锁文件后必须重跑 pytest（快测 + 全量），并更新下方「实测结果」。
+
+# 实测结果（2026-09-20，1.1.0 电价日历改版）：
+#   依赖树本次未改动，跑的是同一套 pin。
+#
+#   CI 口径（标准口径：GitHub Actions ubuntu-latest / Python 3.13.15，main @ 70ea9ae）：
+#     快测 244 项通过 —— push 触发 Run 35478561322，`244 passed, 33 deselected in 50.45 s`，
+#       整个 job 含装依赖 92 s。
+#     全量 277 项通过 —— workflow_dispatch Run 35486570178，整个 job 851 s，
+#       其中 `coverage run -m pytest -m ""` 那一步占 805 s（03:27:13.98 → 03:40:38.67，含 coverage
+#       插桩），报表 TOTAL 6650 stmts / 1217 miss = **82%**。
+#       ⚠️ 这次拿不到 pytest 自己的"N passed in Xs"汇总行：那一步的命令里写了 `-q`，而 pytest.ini
+#       的 addopts 已经带了一个 `-q`，两个叠加等于 `-qq`，pytest 把汇总行连同样吞了——277 这个数
+#       是数四行进度点的圆点（72×3 + 61）确认的，全绿无一失败。
+#     去掉重复 `-q` 后复跑（Run 35496788350 @ 70ea9ae）：`277 passed, 1 warning in 796.12 s
+#     (0:13:16)`，job 整跑 836 s，覆盖率仍是 82%。**以后引用全量计时以这个口径为准**——pytest
+#     自报的 796 s 是纯测试时间，job 的 836 s 另含 checkout 与装依赖。`v1.1.0` 标签就打在
+#     被这次运行验证过的 70ea9ae 上。
+#     与上一版对照：CI 的 846 s（Run 35446508669）是"pytest 与 coverage 各跑一遍"布局下
+#       `pytest -m ""` 的单步实测，重复的那一遍后来已合并；本次 805 s 是合并后布局的实测。
+#
+#   本机口径（Python 3.13.9 / Anaconda，改动过程中的自查）：
+#     快测 244 项 68 ~ 93 s（三次实测 67.7 / 75.5 / 92.8 s）；全量 277 项两次 832 s / 758 s 全绿
+#     （`pytest -o addopts= -q`，同一个 commit 上重复跑就差了 74 s，所以本机计时只当量级看）。
+#     本机快测明显慢于 CI，时间几乎全在一处：`tests/test_chat_agent.py` 的 module 级 fixture
+#     真跑一次 `run_daily_scheduling`，实测 65.3 s（MILP 占满），给该文件 20 项测试共用。
+#     上一版这里记的是「215 项 / 57 s」——变慢了，但**没有归因**：本轮没有回头测旧数据下的
+#     同一 fixture，所以不下结论。
+#
+#   计数自查：pytest -o addopts= -q --collect-only -m "" | tail -1
+# ==============================================================================
+
+# ---------- 直接依赖 ----------
+coverage==7.16.0
+cryptography==49.0.0
+fastapi==0.141.1
+highspy==1.15.1
+httpx==0.28.1
+langchain==1.3.14
+langchain-core==1.5.3
+langchain-openai==1.4.1
+langgraph==1.2.10
+numpy==2.5.1
+openpyxl==3.1.5
+pandas==3.0.5
+PuLP==3.3.2
+pydantic==2.13.4
+pytest==9.1.1
+python-multipart==0.0.32
+scikit-learn==1.9.0
+scipy==1.18.1
+uvicorn==0.52.1
+xgboost==3.4.1
+
+# ---------- 传递依赖（由 pip 解析得到，勿手工修改）----------
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+colorama==0.4.6
+distro==1.9.0
+et_xmlfile==2.0.0
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.13.0
+httpx2==2.13.0
+idna==3.19
+iniconfig==2.3.0
+jiter==0.17.0
+joblib==1.6.0
+jsonpatch==1.33
+jsonpointer==3.1.1
+langchain-protocol==0.0.19
+langgraph-checkpoint==4.2.0
+langgraph-prebuilt==1.1.0
+langgraph-sdk==0.4.4
+langsmith==0.12.5
+narwhals==2.26.0
+openai==2.54.0
+orjson==3.12.0
+ormsgpack==1.12.2
+packaging==26.3
+pluggy==1.6.0
+pycparser==3.0
+pydantic_core==2.46.4
+Pygments==2.21.0
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+regex==2026.9.10
+requests==2.34.2
+requests-toolbelt==1.0.0
+six==1.17.0
+sniffio==1.3.1
+starlette==1.6.0
+tenacity==9.1.4
+threadpoolctl==3.7.0
+tiktoken==0.14.0
+tqdm==4.70.1
+truststore==0.10.4
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.4
+urllib3==2.8.0
+uuid_utils==0.17.1
+websockets==16.1.1
+xxhash==4.0.1
+zstandard==0.25.0

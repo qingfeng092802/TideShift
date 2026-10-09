@@ -1,0 +1,30 @@
+# 行尾与文件类型规范
+#
+# 为什么必须有这个文件：本仓库此前依赖各人本地的 core.autocrlf 来决定行尾，
+# 而历史提交内 78 个文本文件已统一为 LF。一旦有人以 autocrlf=false 或
+# core.eol=crlf 克隆并提交，全仓库会瞬间变成混合行尾，此后每一行 diff 都不可读。
+# 这里把结论写进版本库本身，让行尾不再取决于任何人的本地 git 配置。
+* text=auto eol=lf
+
+# 换行即损坏的二进制资源，必须跳过转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+
+# 平台相关脚本：行尾有语义，锁定 LF
+# （.sh 带 CRLF 会在 Linux/macOS 上以 $'\r': command not found 直接跑挂）
+*.sh text eol=lf
+# .bat 的 CRLF 由 cmd.exe 要求，这里显式声明意图而非留给本地配置猜
+*.bat text eol=crlf
+
+# 生成物与第三方资源只做展示层排除，不做行尾豁免。
+# 特别说明 web/vendor/echarts.min.js 为何**不能**标 -text：它在版本库里的 blob 是
+# LF，标成 -text 后 `git add --renormalize` 会按工作树的 CRLF 原样重新入库，
+# 凭空造出一个 1MB vendored 文件的伪 diff。
+requirements.lock linguist-generated=true
+web/vendor/** linguist-vendored=true
