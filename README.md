@@ -7,7 +7,7 @@
 把电池热损耗、温升约束与寿命衰减折算进 MILP 优化目标 —— 输出的不是好看的曲线，而是能落地的调度策略。
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.2.3-orange)
+![Version](https://img.shields.io/badge/version-1.2.4-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
@@ -32,7 +32,7 @@
   读快测、`-m "slow"` 读 slow 档，两档相加即总数（截至 2026-10-07 实测 **300 + 39 = 339**；基线 HEAD `29ab809`
   为 328 项，增量 = headline 复现测试 5 项 + 缓存位/送达判据 3 项 + 截图工具守卫 3 项）、`requirements.lock` 锁依赖、前端资源本地分发，**断网可跑全流程**。
 
-> 三件不回避的事：内置 `data/` 的**负荷与气温是合成的**（电价时段划分有 331 号文出处，基准价仍是示例值，逐条对应见 [`data/README.md`](data/README.md)）；负荷预测 XGBoost **3.12% MAPE 略输朴素基线的 3.01%**；
+> 三件不回避的事：内置 `data/` 的**负荷与气温是合成的**（电价时段划分有 331 号文出处，基准价仍是示例值，逐条对应见 [`data/README.md`](data/README.md)）；负荷预测 XGBoost **3.12% MAPE 输给同日朴素基线的 2.69%**（同口径差 **0.43 个百分点**）；
 > 需求响应按"放电量 × 补贴"结算，**尚未建模 CBL 基线**。全部列在[已知局限与路线图](#已知局限与路线图)。
 
 ![端到端演示：求解进度 → 数据总览 → 电池热管理 → 对话解释](docs/screenshots/tideshift-demo.gif)
@@ -92,9 +92,9 @@
 
 它们在文档里就是写成 `assert` 的，容差 0.5 / 0.5 / 0.2 / 0.01，任何人 clone 后都能复算到小数点后两位。
 
-这五个数**此前在 `tests/` 里命中 0**（只有 `test_end_to_end.py` 的一句注释提到 46.92），意味着改了物理常数、离散步长或 SOC 区间权重都会静默变错而测试照绿。核查阶段发现这个空位后，已把它们钉进 **`tests/test_experiments_repro.py`**（`slow` 档，同一套容差；净收益按恒等式 `套利 + DR补贴 − 衰减` 守，不重复钉绝对值）。
+这五个数**此前在 `tests/` 里命中 0**（只有 `test_end_to_end.py` 的一句注释提到 46.92），意味着改了物理常数、离散步长或 SOC 区间权重都会静默变错而测试照绿。核查阶段发现这个空位后，已把它们钉进 **`tests/test_experiments_repro.py`**（`slow + repro` 档，同一套容差；净收益按恒等式 `套利 + DR补贴 − 衰减` 守，不重复钉绝对值）。1.2.4 起这条用例还挂了 `repro` 标记，随每个 PR 由 CI 的 `repro-tests` 专线跑（约 60 s），见下文[测试](#测试)一节。
 
-> ⚠️ 如实说明两点：`slow` 档 **PR CI 默认不跑**，它走 nightly 与手动触发——所以"PR 全绿"不等于"这五个数刚被验过"，要认那次全量运行的记录；另外**整轮耗时随当日规模在 40~60 s 之间浮动**，别把 45 秒当上界。
+> ⚠️ 如实说明两点：`slow` 档 **PR CI 默认不跑**（`repro` 那 5 项除外，它另有专线），全量走 nightly 与手动触发——所以"PR 全绿"不等于"这五个数刚被验过"，要认那次全量运行的记录；另外**整轮耗时随当日规模在 40~60 s 之间浮动**，别把 45 秒当上界。
 
 ### ③ 评测探针表 —— 防幻觉机制的失效边界
 
@@ -293,7 +293,32 @@ Python 依赖分三份管理，职责不要混用：
 |------|------|----------|
 | `requirements.txt` | 直接运行依赖，写成 `>=下界,<上界` 区间 | `pip install -r requirements.txt` |
 | `requirements.lock` | **完整锁**：76 个包（直接 20 + 传递 56）全部钉到具体版本 | `pip install -r requirements.lock` |
-| `requirements-dev.txt` | 开发/测试依赖（含 `pytest`、`coverage`、`httpx`） | `pip install -r requirements-dev.txt` |
+| `requirements-dev.txt` | 开发/测试依赖（含 `pytest`、`coverage`、`httpx`、`ruff`、`mypy`） | `pip install -r requirements-dev.txt` |
+| `pyproject.toml` | 打包元数据与工具链配置（`ruff` / `mypy` / 命令行入口） | 见下方「可编辑安装」 |
+
+**关于 `pyproject.toml`（P2.2 新增）**
+
+`pyproject.toml` 里的 `[project.dependencies]` 是 `requirements.txt` 的**机器可读镜像**，供
+`pip install -e .` 与依赖解析工具使用；`requirements*.txt` 仍是面向使用者的安装入口，不搬家。
+两者**不许漂移**——`tests/test_packaging.py` 逐条比对包名与版本区间，任何一边改了另一边没跟就会红。
+版本号仍只有 `src/__init__.py` 的 `__version__` 一处来源，`pyproject.toml` 用 `dynamic` 引用它，
+不抄第二个数字。
+
+**可编辑安装（可选，比 `requirements.txt` 多拿到命令行入口）**
+
+```bash
+pip install -e .          # ✅ 支持：可执行文件与 data/、web/ 资源都留在仓库里
+# pip install .           # ❌ 不支持，见下方说明
+```
+
+装出来的两个命令与既有脚本等价：`tideshift`（= `python backend/server.py`）、
+`tideshift-manage`（= `python -m backend.manage`，口令恢复 / 状态查看）。
+
+> **为什么不支持 `pip install .`（非 editable 安装）**：`web/` 与 `data/` 是按
+> `__file__` 相对项目根解析的**运行期资源**（`src/data/data_loader.py` 的
+> `PROJECT_ROOT = Path(__file__).resolve().parents[2]`、`backend/server.py` 的静态目录挂载、
+> `src/utils/logger.py` 的日志目录），装进 `site-packages` 后这些路径全部错位，服务起不来。
+> 本项目是**应用**不是库，这里如实说明，不假装能装。
 
 **两个依赖文件的区别（重要）**
 
@@ -325,11 +350,15 @@ source .venv/bin/activate
 pip install -r requirements.txt     # 常规：允许补丁/次版本升级，仍在实测的主次版本线上
 pip install -r requirements.lock    # 严谨：逐版本完全一致（含传递依赖），推荐 CI / 生产环境
 
-# 4. 可选：安装开发与测试依赖（pytest / coverage / httpx）
+# 4. 可选：安装开发与测试依赖（pytest / coverage / httpx / ruff / mypy）
 pip install -r requirements-dev.txt
 
 # 5. 可选：验证安装（需先完成第 4 步）
 pytest -q
+
+# 6. 可选：静态检查（需先完成第 4 步；CI 的 lint job 跑的就是这两条）
+ruff check .
+mypy
 ```
 
 > **`pytest` 不在运行依赖里**——它属于 `requirements-dev.txt`。只想跑起服务的话，完成第 3 步后
@@ -457,7 +486,18 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 
 ### API 一览
 
-服务启动后可访问 `http://127.0.0.1:8800/docs` 查看 FastAPI 自动生成的交互式文档。主要端点：
+交互式文档（Swagger UI `/docs`、ReDoc `/redoc`、`/openapi.json`）**默认关闭**：这几条路径不在 `/api/` 前缀下，早期版本既不经过 JWT 中间件也不在静态白名单里，未认证即可读到全部端点的签名、参数与响应模型；而且那两张页面本来就打不开——Swagger UI / ReDoc 的脚本与样式从 jsdelivr CDN 取，被本项目的 CSP（`script-src 'self'`）拦掉，只能白屏。这与项目"前端零外部 CDN"的既有属性（ECharts 为本地 vendored + SRI）也相冲突，所以此前的说明是错的。
+
+需要时显式开启，开启后**仍走 JWT 鉴权**（未认证返回 401），且只对这几条路径放宽 CSP：
+
+```bash
+# Linux / macOS
+export ENERGY_ENABLE_DOCS=1
+# Windows PowerShell
+$env:ENERGY_ENABLE_DOCS = "1"
+```
+
+启动后登录系统，再带 token 访问 `http://127.0.0.1:8800/docs`。主要端点：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -498,6 +538,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 | `ENERGY_TRACE_DIR` | `logs/traces/` | 运行追溯 JSONL 目录 |
 | `ENERGY_TRACE_LEVEL` | `basic` | `off` 关闭 / `basic` 只记事件名与长度计数（不落用户内容）/ `full` 连文本一起记 |
 | `ENERGY_TRACE_MAX` | `64` | 进程内环形保留的 run 数，决定 `/api/traces` 可见范围 |
+| `ENERGY_ENABLE_DOCS` | 空（关闭） | 是否挂载 FastAPI 自动文档（`/docs` / `/redoc` / `/openapi.json`）。设 `1`/`true`/`yes`/`on` 才开启；开启后仍走 JWT 鉴权，且仅这几条路径放宽 CSP 以允许 CDN 资源。公网部署不要开 |
 
 **部署到公网前请务必阅读**：本项目面向单机/内网场景设计，公网部署至少需要（1）修改默认管理员口令、（2）配置 HTTPS 反向代理、（3）限制 `config/` 与 `.solve_cache/` 目录的访问权限。
 
@@ -563,11 +604,12 @@ TideShift/
 │   ├── echarts-NOTICE.txt           # ECharts 上游 NOTICE（Apache-2.0 §4(d) 要求随附）
 │   └── zrender-BSD-3-Clause.txt     # ECharts 内嵌 ZRender 的许可原文
 ├── .env.example
-├── .github/workflows/ci.yml         # CI：PR 快测 / nightly 全量 + 覆盖率
+├── .github/workflows/ci.yml         # CI：PR 快测 + repro + lint / nightly 全量 + 覆盖率
 ├── LICENSE                          # 本项目 MIT 许可
 ├── THIRD_PARTY_NOTICES.md           # 第三方组件与许可声明
 ├── requirements.txt / requirements-dev.txt / requirements.lock
-├── pytest.ini                       # 测试配置（markers: slow / unit）
+├── pyproject.toml                   # 可编辑安装（pip install -e .）与 ruff / mypy 配置
+├── pytest.ini                       # 测试配置（markers: slow / unit / eval / repro）
 └── start_web.bat / start_web.sh / restart_backend.bat
 ```
 
@@ -789,9 +831,17 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run
 
 ### 负荷预测
 
-30 天实测（2024-07-30 调度日）：项目 XGBoost **3.12%** MAPE，朴素基线 **3.01%** ——
-**XGBoost 略输朴素基线 0.11 个百分点**。原因是合成数据为确定性日模式 + 3% 噪声，规律性极强，
+30 天实测（2024-07-30 调度日）：项目 XGBoost **3.12%** MAPE，**同日**朴素基线 **2.69%** ——
+**XGBoost 输给朴素基线 0.43 个百分点**。原因是合成数据为确定性日模式 + 3% 噪声，规律性极强，
 朴素基线天然占优。改进方向见[已知局限与路线图](#已知局限与路线图)。
+
+> ⚠️ **口径说明（2026-10-12 修正）**：这里两个数必须**同日同口径**。此前写的是
+> 「3.12% 略输 3.01%，差 0.11 个百分点」，但 3.01% 是 `train()` 在**还不知道调度日**时
+> 算出的测试集**三日均值**（07-27/07-28/07-29 的 3.04/3.12/2.87），而 3.12% 是 07-30
+> **单日**递归预测值——把单日模型分与三日基线均值相比，差距被压小了约 4 倍。
+> 同口径（都用 07-30 那一天）的真值是 **3.12% vs 2.69%，差 0.43 个百分点**。
+> `LoadForecastAgent.predict()` 本来就返回同日基线（`ForecastResult.baseline_mape`），
+> 复算：`docs/experiments.md` §2。**方向不变（XGBoost 确实输），但差距比原先写的大。**
 
 > 📄 **完整实验记录见 [`docs/experiments.md`](docs/experiments.md)**：三种策略逐项对比、
 > 负荷预测 ablation 明细、LLM 解释层评测、复现命令，以及**未复核项清单**。
@@ -806,6 +856,9 @@ pytest
 # 全量（含真实 MILP 求解与端到端流程）
 pytest -o addopts= -q
 
+# 只跑 headline 数字复算（1.2.4 新增；命令行 -m 会覆盖 addopts 里的 -m，无需 -o addopts=）
+pytest -m repro
+
 # 覆盖率
 coverage run -m pytest -o addopts= && coverage report
 ```
@@ -816,14 +869,22 @@ coverage run -m pytest -o addopts= && coverage report
 
 测试规模按两档分别复算，不写死总数：`pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`
 读快测，`pytest -o addopts= -q -m "slow" --collect-only | grep -c ::` 读 slow 档，两档之和即总数
-（截至 2026-10-07 实测 **快测 300 + slow 39 = 339**，其中 9 项为 `eval` 标记的 agent 行为评测；
-基线 HEAD `29ab809` 是 328 项，增量 = `tests/test_experiments_repro.py` 5 项 + `tests/test_web_assets.py` 的缓存位/送达判据 3 项 + `tests/test_capture_tool.py` 的截图工具守卫 3 项），
+（截至 2026-10-12 实测 **快测 405 + slow 39 = 444**，其中 9 项为 `eval` 标记的 agent 行为评测；
+1.2.3 那版是 300 + 39 = 339，+105 项来自本轮安全与工程修复新增的四份测试文件与三份既有文件的扩充，
+逐项来源见 CHANGELOG 的 1.2.4 节），
 全部为真实断言（无占位用例）。`slow` 标记的用例会真实执行 MILP 求解与全流程，分钟级耗时，
 故 PR CI 默认跳过、全量走 nightly 与手动触发。计数可自查：
 `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`。
 
 `eval` 那 9 项量的是"agent 把任务做对了吗"（任务成功率、工具选择、数字保真、守卫捕获率），
-与其余 330 项（339 − 9，同样按上面的式子复算）量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+与其余 435 项（444 − 9，同样按上面的式子复算）量的"代码按设计跑了吗"分开计量——前者全绿不代表后者不退化。见 [`evals/`](evals/README.md)。
+
+> **`repro` 专线（1.2.4 新增）**：`tests/test_experiments_repro.py` 同时带 `slow` 与 `repro`
+> 两个标记，CI 里除 `fast-tests` / `full-tests` 外多了一条 `repro-tests`（`pytest -m repro`，约 60 s，
+> 随每个 PR 跑）。补它的原因是默认通道 `-m "not slow"` **对物理常数改动完全瞎**：实测把
+> `soc_min` 0.20 → 0.15，快档 300 项全绿，只有 4 项报红，而那 4 项全在默认通道之外。
+> 现在两层都有——常数本身由 `tests/test_physics_constants.py` 在快档钉住（改一个数就红），
+> 结果漂移由这条专线管（求解器换版、数值内核变化、电价日历改动）。
 
 **发版门槛 = CI 全量 `pytest`**。工作流已加 `workflow_dispatch`，可在 Actions 页面一键跑全量（含 `slow`），作为发布前的标准回归入口——本机若因受限沙箱跑不了 pytest，就以这个入口为准，不要用替代验证代替标准入口。**v1.0.0 这道门槛已实际跑通**：247 项全绿，`pytest -m ""` 单步 846 s（`ubuntu-latest` / Python 3.13）。注意这个数是**当时布局**（pytest 与 coverage 各跑一遍）下的单步耗时，重复的那一遍后来已合并掉，所以它是那次运行的实测，不是当前布局的预测值。**1.1.0 也跑通了**：`277 passed in 796.12 s`（job 整跑 836 s，覆盖率 82%），配套的 `fast-tests` 是 `244 passed, 33 deselected in 50.45 s`。有一处要如实记下：这道门槛**原先不打印**自己的计数与计时——命令行的 `-q` 叠上 `pytest.ini` 里的 `-q` 成了 `-qq`，汇总行被一起吞掉，所以第一次跑那个 277 是数进度圆点（72×3 + 61）确认的。重复的 `-q` 已从工作流去掉并复跑验证，上面的数字现在是 pytest 自报的；引用时用 796 s（纯测试）而不是 836 s（job 另含 checkout 与装依赖）。
 
@@ -847,19 +908,23 @@ PR 与 main 推送触发快测（跳过 slow），每日 UTC 18:00 与手动触�
 | `test_llm_explainer.py` | 解释层：摘要 / 数字回查 / 降级 / mock |
 | `test_chat_agent.py` | 对话 Agent 工具函数 |
 | `test_auth_security.py` | JWT / 口令 / 中文用户名边界 |
-| `test_cache_security.py` | 缓存验签 / 白名单 / LRU |
-| `test_server_api.py` | API 认证 / 首登强改密 / 限流 / SSRF |
+| `test_cache_security.py` | 缓存验签 / 白名单 / LRU / **文件名路径穿越**（43 项） |
+| `test_server_api.py` | API 认证 / 首登强改密 / 限流 / SSRF / **`date` 入参校验**（33 项） |
+| `test_physics_constants.py` | 物理常数与价格口径的**绝对值**守卫（快档，不跑 MILP；16 项，含衰减成本不得低于物理口径的保守性判据） |
+| `test_packaging.py` | `pyproject.toml` 的可安装性：版本号单一来源、依赖与 `requirements.txt` 同源、`pip install -e .` 的两条入口（14 项） |
+| `test_dr_revenue_caliber.py` | DR 收益判定与衰减模型**同一口径**：补贴/衰减/净收益三项恒等式闭合、零响应不得判为赚钱（7 项） |
 | `test_models_boundaries.py` | 数值边界（除零 / NaN / 热模型末点） |
 | `test_alerts_propagation.py` | 告警字段端到端透传 |
 | `test_evals.py` | 评测层自身：四维判定的分母口径、打桩是否真的挡住了 MILP、用例文件完整性（31 项，不依赖求解器与网络） |
 | `test_evals_run.py` | 用评测层量 agent：任务成功率、数字保真、副作用守卫、与 `reports/baseline.json` 的回归比对（`eval + slow`） |
 | `test_parameter_search.py` | 寻优 Agent 的四条护栏（越温限不可选、跨分辨率不进结论、预算与时限、噪声不算战果）+ 1 项真实 MILP |
 | `test_trace.py` | trace 的线程隔离、按级脱敏、装饰器签名不变性、`/api/traces` 鉴权与 run_id 不作路径、口径回传、断线落终态、看板三处接线一致（22 项） |
-| `test_web_assets.py` | 前端接线约定：每个本地 css/js 都带 `?v=`、缓存位等于 `__version__`、引用的文件确实存在（9 项） |
+| `test_web_assets.py` | 前端接线约定：每个本地 css/js 都带 `?v=`、缓存位等于 `__version__`、引用的文件确实存在、`node --check` 语法、前端不得硬编码衰减系数（21 项） |
 | `test_review_fixes.py` | 后端安全与健壮性回归：静态文件扩展名白名单、JWT UA 指纹绑定、登录限流 LRU、HSTS/CSP 头、统一 DELETE 语义、上传临时文件链路（10 项，不触发 MILP） |
 | `test_dr_thermal_overshoot.py` | DR 热安全校验必须覆盖事件窗口**之后**的热惯性过冲（历史上漏检，实测过冲 48.9 ℃ 越过 45 ℃ 降额线）（2 项） |
+| `test_experiments_repro.py` | 复现 README 五个 headline 数字的真 MILP 回归（`slow + repro`，CI 有 `repro-tests` 专线；5 项） |
 
-CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测，每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
+CI（`.github/workflows/ci.yml`）：PR 与 main 推送触发快测、`repro-tests`（物理常数/求解器回归）与 `lint`（ruff + mypy），每日 UTC 18:00（北京 02:00）跑全量 + 覆盖率。CI 使用 Python 3.13，与 `.python-version`、`requirements.lock` 三者口径统一。
 
 ## 常见问题
 

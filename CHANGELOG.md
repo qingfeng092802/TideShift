@@ -3,6 +3,181 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（SemVer）。
 唯一版本号来源：`src/__init__.py` 的 `__version__`。
 
+## [1.2.4] - 2026-10-12
+
+一次**安全与工程完备性修复**，来自外部代码审查（`review/reports/`）。SemVer 取 patch：
+不改任何业务口径——README「量化成果表」的五个 headline 数字逐字未变（慢档 39 项全绿复算）。
+
+单独占一个缓存位是因为前端有两个文件被改了（`pages.js` / `app.js` / `charts.js`），
+不升 `?v=` 的话老用户继续吃旧 JS。
+
+### 安全（Security）
+
+- **反序列化 RCE（CRITICAL）**：`src/utils/cache_security.py` 的 `RestrictedUnpickler` 用
+  `name.startswith(prefix)` 判白名单，而 `find_class` 收到的 `name` 是**点号全名**
+  （`src.utils.logger`）——`startswith("src.")` 放行之后，`super().find_class()` 仍按点号
+  逐级取属性，于是 `src.utils.logger` 能一路走到 `os.system`。
+  实测 8 种绕过载荷全部执行成功。**修法不是收紧前缀，是删掉 pickle**：缓存改成
+  `TSJ1` + sha256-HMAC + UTF-8 JSON（`_MAGIC = b"TSJ1"`），彻底没有可执行语义。
+  5 个真实 `.pkl` 里只有 4 个 dataclass、ndarray 与一个 `pd.DatetimeIndex`，JSON 完全够用。
+  旧 `.pkl` 与 `HMAC1` 格式一律按**缓存未命中**处理（不报错、不迁移）。
+- **SSRF（HIGH）**：`src/utils/url_guard.py` 原按黑名单挡 IP，漏了
+  `::ffff:127.0.0.1`、`::`、`100.100.100.200`（阿里云元数据）、`100.64.0.0/10`（CGNAT）、
+  `198.18.0.0/15`。改成 `ipaddress` 的 `not addr.is_global` 单一判据 + IPv6 解包。
+  另外发现 `urllib.request.build_opener` **两次都让 IP 固定失效**：系统代理会自己解析
+  主机名（探针看到连接落到 `127.0.0.1:4780`），加 `ProxyHandler({})` 后 `build_opener`
+  仍把默认 handler 排在前面（连接落到 `rebind.example.com:80`）。改成直接用
+  `http.client` 建连，并拒绝 301/302/303/307/308。
+- **solve 缓存文件名路径穿越（HIGH）**：`save_signed`/`load_signed` 只做
+  `os.path.join(cache_dir, filename)`，而 `filename` 的一个来源是请求参数——
+  `SolveReq.date` 被原样拼进页面级缓存键，而 `pd.to_datetime('2024-07-15/../../..')`
+  **解析成功**。两个普通鉴权请求即可在仓库树里写出带真实 HMAC 签名的文件；
+  换成指向另一天缓存条目的穿越路径即形成跨条目投毒。双层堵死：
+  `cache_security._is_safe_cache_name()`（basename 判据 + 显式拒 `"."`/`".."`/分隔符/空字节）
+  与 `SolveReq.date` 的 `field_validator`（`^\d{4}-\d{2}-\d{2}$` **且**必须是真实存在的日期）。
+- **登录锁定可被挤掉（HIGH）**：`backend/server.py` 的失败计数原用
+  `pop(next(iter(d)))` 做容量淘汰，攻击者刷 10000 个不同用户名就能把受害者的锁定记录挤出去。
+  改成 `_login_entry_evictable()` 只淘汰**已过期**条目，`_login_prune_over_cap()` 在
+  10000→20000 之间腾挪；锁定期内的条目永不被淘汰。
+- **`/docs`、`/redoc` 在鉴权之外（HIGH）**：改为默认关闭（`_ENABLE_DOCS` 环境变量开启），
+  并加 `_DOCS_CSP`。**请求体大小限制（HIGH）**：新增纯 ASGI 的
+  `BodySizeLimitMiddleware`（默认 1 MiB，`/api/upload` 豁免）——不能用
+  `BaseHTTPMiddleware`，它会先把 `receive` 读完，限制就形同虚设。
+- **密钥文件权限**：新增 `src/utils/file_perms.py` 的 `harden_file_permissions()`
+  （`chmod 0o600` + Windows `icacls`），`backend/auth.py` 的 `_harden_permissions` 改为调用它。
+
+### 修复（Fixed）
+
+- **DR 收益闸门的两套口径**（审查报告 3.3）：`DemandResponseAgent` 原来在**生成
+  `adjusted_power` 之前**就做收益判定，用的是 `_check_dr_revenue()` 里手写的
+  `* 0.8` 响应率、`* 1.5` SOC 系数、`/ 2`、`/ cycle_life` —— 与
+  `BatteryDegradationModel` 完全不同的第三套账。后果是 07-30 那次：target 500 kW、
+  基础调度已贴着 1000 kW 额定功率，旧实现估出"补贴 565.6 / 衰减 56.56 / 净赚 509.04"，
+  于是返回 `accepted=True`，而实际 `response_power_kw = 0.0`——**一分钱没赚，一天白算**。
+  现在收益判定移到 `adjusted_power` 生成之后，改为对
+  `self.degradation_model.compute_degradation_from_power()` 做**同一模型内的差分**，
+  并保留 `profitable`/`estimated_subsidy`/`estimated_degradation`/`net_revenue` 四个键。
+  07-15 独立复现同一"假接受"模式（旧闸门估 505.08 元净赚、实际 0 kW）。
+  对外可见变化只有 `dr_events_count`（07-15 由 2 变 1），五个 headline 数字逐字未变。
+- **衰减模型分母口径**（审查报告 3.3 后半）：审查建议"100% DoD 应是 4000 次，
+  分母该从 6000 改小"。**实测证明方向相反**，故不改分母，改注释并加守卫：
+  寿命幂律 `L(d) = 4000·d^(-k)`、`k = ln(6000/4000)/ln(1/0.8) = 1.8171`；
+  实际窗口 DoD=0.70 下本模型 `equivalent_cycles = 0.9520` → **253.87 元/循环**，
+  物理口径 `L(0.70) = 7648 次` → **209.22 元/循环**，比值 **1.21 偏保守**。
+  改成 ÷4000 会把保守度推到 **1.82 倍**，更容易把赚钱的 DR 判成不划算。
+  新增审计函数 `physical_lifetime_cycles(dod)`（不在成本路径上）与
+  `tests/test_physics_constants.py::test_degradation_is_conservative_vs_physical`。
+- **XGBoost 对比跨口径**（审查报告 3.8）：README 拿**单日** 3.12% 比**测试集多日平均**
+  3.01%，同日朴素基线其实在 `load_forecast_agent.py:600` 就算出来了，是 **2.6869%**。
+  改为同口径比较，差距 **0.43 个百分点**（原报 0.11 pp）。⚠️ 方向不变——XGBoost 仍然输给
+  朴素基线，只是输得更多；这是量级/口径错误，不是结论错误。
+- **前端数值漂移**（审查报告 3.7）：`web/js/pages.js` 硬编码 `[3.0, 1.5, 1.0, 1.8]`
+  画衰减系数图，而引擎按 `config.py` 的 `"0.8-1.0": 2.0` 收费——用户看到 1.8、优化器按 2.0 算。
+  改为从 `/api/bootstrap` 的 `engine_config` 读，后端未下发时显示 `—`（而不是 0 或一份抄来的常数）。
+  同样处理热参数与求解阶段时间线。
+- **其他真实缺陷**：`evals/grounding.py:50` 的 `zip(flagged, flagged_nums)` 把误报列表错位；
+  `chat_agent.py:245` 的潜在 `AttributeError`；`parameter_search_agent.py` 的流编码。
+
+### 新增（Added）
+
+- **`pyproject.toml`（P2.2）**：可 `pip install -e .`（**不支持** `pip install .`——`web/` 与
+  `data/` 按 `__file__` 定位项目根）。版本号仍由 `src/__init__.py` 单一来源（`dynamic = ["version"]`）。
+  `[tool.ruff]` / `[tool.mypy]` 也在这里。pytest 配置**留在 `pytest.ini`**（单一归属，不搬家）。
+- **ruff + mypy + pre-commit（P2.1）**：此前全仓 grep `ruff|mypy|flake8|black|pylint|isort|pre-commit|bandit`
+  **零命中**。新增 `.pre-commit-config.yaml` 与 CI 的 `lint` job（`ruff check --output-format=github .` + `mypy`）。
+  规则集刻意**不含** `UP`/`ARG`/`PT`/`SIM`——那会一次性重排全仓，淹没真正的修复。
+- **`repro` 标记与 CI 专线（P1.8）**：`tests/test_experiments_repro.py` 现在同时带
+  `slow` + `repro` 两个标记，CI 新增 `repro-tests` job（`pytest -m repro`，约 60 s）。
+  默认通道对物理常数改动完全瞎（实测 `soc_min 0.20→0.15` 时快档 300 项全绿、只有 4 项报红，
+  而那 4 项全在 `-m "not slow"` 之外）。现在两层都有：常数本身由
+  `tests/test_physics_constants.py` 在快档钉住，结果漂移由这条专线管。
+- **测试**：`tests/test_physics_constants.py`（16 项，把物理常数钉在快档）、
+  `tests/test_dr_revenue_caliber.py`（7 项，含"零响应不得判为赚钱"）、
+  `tests/test_packaging.py`（14 项，解析 `pyproject.toml`）、
+  `src/utils/file_perms.py`、`tests/test_cache_security.py` 的路径穿越一节（12 种载荷）、
+  `tests/test_server_api.py` 的 `date` 入参一节（14 种载荷 + 1 条反向护栏）。
+
+### 变更（Changed）
+
+- `src/agents/storage_optimization_agent.py`：`optimize()` 由 273 行拆成四段
+  （`_prepare_inputs` / `_build_milp_model` / `_check_solver_status` / `_extract_result`），
+  建模产物用新增的 `_MilpModel` dataclass 传递。**纯搬移**——快档 364 项与拆分前逐项一致，
+  慢档 39 项与五个 headline 数字一字未变。
+- `tests/test_web_assets.py` 增加 `?v` 与 `__version__` 的一致性判据；`README.md` / `README.en.md`
+  补 `pyproject.toml` 说明与 `pip install -e .` 的反例标注。
+
+### 补记（Docs backfill，P2.5）
+
+审查报告指出 CHANGELOG 落后于 git 历史。1.2.3 之后、本次修复之前还落了 8 笔提交
+（2026-10-05 ~ 10-09），除第一笔外都是**纯文档提交**——改的是 README 与内部文档，
+没有动代码、没有单独占缓存位，此前一节没记。补在这里
+（`3241b93` 那笔已由 1.2.3 节覆盖，不重复）：
+
+- `4049f81` **README 补「给评审者的 5 分钟路径」与实验读数，并新增 headline 复现测试**：
+  这一笔不只是文档——它新建了 `tests/test_experiments_repro.py`，把量化成果表的 4 个
+  绝对值（套利 1816.27±0.5、衰减 388.37±0.5、最高温 46.92±0.2、等效循环 1.4564±0.01）
+  钉成可复算的，此前这 5 个数在 `tests/` 里命中 0。中英 README 各加「给评审者的
+  5 分钟路径」与「技术选型问答」两节。当时测试规模写的是"快测 294 + slow 39 = 333"，
+  下一笔（`3241b93`）把它换成关系式口径，因为写死的数会随每次加用例腐化。
+  1.2.4 又给这份测试加了 `repro` 标记与 CI 专线（见本节「新增」条）。
+- `a77332e` **截图作废说明前移到图片下方，调度日与年化口径各收敛为一处权威**：
+  此前同一口径在 README 里有两处说法，读者无法判断哪一处是权威；现在每处只留一个出处。
+- `4f42757` **看板截图用 `capture_screenshots.py` 重录入库，内部文档同步收敛**：
+  截图从手工截取改为工具复现，重录时的版本是 v1.2.3（`README.md:47` / `:179` / `:1039`
+  与 `README.en.md:119` / `:718` 里那个版本号是**历史事实**，不随版本升级改动）。
+- `c7f7d47` **公开文档结构收敛，复现判据统一指向 `docs/experiments.md`**：
+  此前"怎么复算这五个数"散在 README、CHANGELOG 与 experiments.md 三处。
+- `ed9b1be` **`.gitignore` 本机启动包装忽略项的注释表述精简**（无行为变化）。
+- `5989183` **精简 README 重写条目的措辞**（无事实变化）。
+- `25f0b43` **补记 10-07 那次改写导致的 `70ea9ae` 引用失效，标注现用 SHA `63ddd2b`**：
+  文档里引用的 commit SHA 在历史被改写后会指向不存在的对象，这正是审查报告 3.10 提到的
+  同一类问题（README 里指向不存在 Run ID 的引用，见下一条）。
+- `e17ff73` **摘掉已失效的 CI Run ID 引用**：README 曾引用 `Run 35486570178` 与
+  `Run 35446508669` 作为"公开 CI 三次连续绿"的证据，而这两个 Run 在 Actions 页面里
+  打不开——等于主动引导面试官去撞 404。已改为不依赖具体 Run ID 的表述。
+
+### 说明（Notes）—— 历史 Run ID 与 SHA 为何不再可达（1.2.4 查明）
+
+上一节那条 `e17ff73` 只处理了 README，当时的判断是"个别 Run 被清理了"。1.2.4 期间
+用 GitHub REST API 直读仓库元数据后，真实原因清楚了，记在这里以免后来者反复排查：
+
+- **当前公开仓库 `qingfeng092802/TideShift` 的 `created_at` 是 `2026-10-09T04:13:40Z`**
+  （北京时间 12:13:40），**晚于本地 HEAD `e17ff73` 的提交时间（10-09 10:27:32 +0800）**。
+  也就是说这个仓库是**新建后一次性导入的**，而不是本机这条 51 笔历史的原仓库。
+- 因此 `GET /repos/.../actions/runs/<id>` 对 `35486570178`、`35446508669`、`35496788350`、
+  `35478561322` **一律 404**——它们属于被替换掉的那个仓库。本文件与 `requirements.lock`
+  里引用的这些 Run ID 是**当时的真实证据**，但在当前仓库里**永久不可查**，属历史叙述，
+  不作改写（改掉就是伪造记录）；只在此处标注可达性。
+- 当前仓库的 CI 记录是**另起的 5 条**，全部 `success`：`#1` push（`2026-10-09T05:12:46Z`）
+  与 `#2`~`#5` 四次 nightly `schedule`（10-09 / 10-10 / 10-11 / 10-13）。
+  所以「CI 连续多日全绿」这个说法**在当前仓库里仍然有据可查**，只是凭据是 Actions 页面上
+  这 4 条 schedule 运行，而不是本节上面引用的那些旧 Run ID。
+- 同源问题也影响 SHA：`git filter-branch` 改署名后所有 SHA 已变，`70ea9ae` / `e50a0ec` 一类
+  旧 SHA 在当前历史中不可达，`25f0f43` 那笔已就本文件内的引用做过标注。
+- **`e17ff73` 那笔漏了 `.github/workflows/ci.yml`**：它只清了 README，而同一对失效 Run ID
+  还留在 CI 定义的两处注释里（`full-tests` job 中解释"为何不能再加 `-q`"的段落）。
+  远端快照其实已经删干净了，本地工作副本反而还带着——直接推送会把这两条死链**又推回公开仓库**。
+  1.2.4 期间用 REST 逐文件比对远端 tree 与工作副本时发现，已按远端措辞删掉这两处 Run ID
+  （只删 ID，保留"合并前那次运行""只能靠数圆点确认 277"等仍然成立的事实描述）。
+
+### 验证（Verified）—— 1.2.4 全量门槛
+
+- **本机全量**：`pytest -o addopts= -q`（快档 405 + `slow` 39 = **444 项**）
+  **`444 passed in 854.35s (0:14:14)`**，exit 0（Python 3.13.9 / Anaconda / Windows）。
+  这是 1.2.4 的验收口径：修复前基线 339 项，新增/扩充 105 项后全绿。
+- **同步后在 `C:` 仓库上复跑全量**：**`444 passed in 893.15s (0:14:53)`**，exit 0。
+  这一遍跑的是**即将推送的那份内容**（不是工作副本），另加 `ruff check .` →
+  `All checks passed!`、`mypy` → `Success: no issues found in 28 source files`。
+  工作副本与 `C:` 仓库的 65 个受管文件由脚本自检逐个 `git hash-object` 比对，**逐字节相同**。
+- **静态检查**：`ruff check .` → `All checks passed!`；`mypy` → `Success: no issues found in 28 source files`。
+- **`repro` 专线**：`pytest -m repro --collect-only` → `5/444 collected`，证明命令行 `-m`
+  覆盖 `pytest.ini` 的 `addopts -m`，CI 里那条 `pytest -m repro` 无需再加 `-o addopts=`。
+- **对外口径不变**：`2024-07-30` 与 `2024-07-15` 两个调度日的五个 headline 数字
+  （套利 1816.27 / DR 补贴 172.83 / 含 DR 净收益 1567.82 / 最高温 47.08 / 等效循环 1.5798）
+  在新旧口径下**逐字相同**（差异 0.0），故 README 量化成果表与截图无需重录。
+  唯一对外可见变化是 07-15 的 `dr_events_count` 由 2 变 1（旧实现对一个 0 kW 的"假接受"
+  也计数，见本节「修复」条）。
+
 ## [1.2.3] - 2026-10-05
 
 HTML 入口改走协商缓存。**这一笔没有前端呈现层改动**，动的是 `backend/server.py` 与测试；

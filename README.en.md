@@ -6,7 +6,7 @@
 Battery heat generation, temperature-rise limits and cycle-life degradation are priced into the MILP objective. What comes out is not a pretty curve — it is a dispatch plan a real battery can survive.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.2.3-orange)
+![Version](https://img.shields.io/badge/version-1.2.4-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/qingfeng092802/TideShift/actions/workflows/ci.yml/badge.svg)
 ![Data](https://img.shields.io/badge/bundled%20data-synthetic%20demo-lightgrey)
@@ -21,8 +21,8 @@ Battery heat generation, temperature-rise limits and cycle-life degradation are 
 - **The cost of constraints, shown**: the thermal constraints give up 3.3% of revenue and bring peak temperature 57.23 → **46.92 ℃** (back inside the derating band, 8.1 ℃ below the shutdown threshold);
 - **Agent behaviour is measured**: offline rule mode, 32 cases → task success **0.969**, number fidelity **1.000**, fabricated-number catch rate **0.750**; with a real model (`deepseek-flash`) the same-denominator 32 cases drop to **0.938** — which two of the three losses are the grader's fault is written up in [`evals/`](evals/README.md);
 - **Tunes its own constraints and admits defeat honestly**: propose → evaluate on real MILP → re-verify at equal resolution; on this dataset it **did not beat the default constraints**, and the [report](docs/parameter-search-sample.md) says exactly that;
-- **Reproducible**: **test counts are a recomputable relation, not a hardcoded number** — `-m "not slow"` and `-m "slow"` each via `pytest -o addopts= -q --collect-only | grep -c ::`, summing to the total (measured 2026-10-07: **300 + 39 = 339**; 328 at baseline HEAD `29ab809`, the delta being 5 headline-reproduction tests, 3 cache-buster/delivery assertions and 3 screenshot-tool guards), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
-> Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, slightly behind the naive baseline's 3.01%**; DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
+- **Reproducible**: **test counts are a recomputable relation, not a hardcoded number** — `-m "not slow"` and `-m "slow"` each via `pytest -o addopts= -q --collect-only | grep -c ::`, summing to the total (measured 2026-10-12: **405 + 39 = 444**; the 1.2.3 figure was 300 + 39 = 339, the +105 coming from the four new test files added by this round's security and engineering fixes plus expansions of three existing ones — see the 1.2.4 section of the CHANGELOG), `requirements.lock` pinning every dependency, frontend assets vendored locally — **the whole flow runs with the network unplugged**.
+> Three things it does not dodge: the bundled `data/` is **synthetic demo data**; the load-forecast XGBoost sits at **3.12% MAPE, losing to the same-day naive baseline's 2.69%** (a **0.43 percentage-point** same-caliber gap); DR settles on "discharged energy × subsidy" with **no CBL baseline modelled**. All of it is listed in [Known limitations and roadmap](#known-limitations-and-roadmap).
 
 ![End-to-end demo: solve progress → overview → battery thermal → chat explanation](docs/screenshots/tideshift-demo.gif)
 
@@ -325,7 +325,18 @@ export LLM_BASE_URL=https://api.deepseek.com/v1
 ```
 
 ### API reference
-Once the server is up, `http://127.0.0.1:8800/docs` serves FastAPI's auto-generated interactive docs. Main endpoints:
+The interactive docs (Swagger UI at `/docs`, ReDoc at `/redoc`, `/openapi.json`) are **off by default**. Those paths sit outside the `/api/` prefix, so early versions ran them past both the JWT middleware and the static-file allowlist — unauthenticated callers could read every endpoint's signature, parameters and response models. They were also broken anyway: Swagger UI / ReDoc pull their scripts and styles from the jsdelivr CDN, which this project's CSP (`script-src 'self'`) blocks, so the page rendered blank. That also contradicted the project's existing "no external CDN" property (ECharts is vendored locally with SRI), so the previous instruction was simply wrong.
+
+Enable them explicitly when needed; they stay behind JWT auth (401 when unauthenticated) and only these paths get a relaxed CSP:
+
+```bash
+# Linux / macOS
+export ENERGY_ENABLE_DOCS=1
+# Windows PowerShell
+$env:ENERGY_ENABLE_DOCS = "1"
+```
+
+Then log in and visit `http://127.0.0.1:8800/docs` with a token. Main endpoints:
 
 | Method | Path | Description |
 |------|------|------|
@@ -365,6 +376,7 @@ Copy `.env.example` to `.env` and edit as needed (`.env` is excluded by `.gitign
 | `ENERGY_TRACE_DIR` | `logs/traces/` | Directory for runtime-trace JSONL files |
 | `ENERGY_TRACE_LEVEL` | `basic` | `off` disables tracing / `basic` records event names and length counters only (no user content on disk) / `full` records the text as well |
 | `ENERGY_TRACE_MAX` | `64` | Number of runs kept in the in-process ring buffer, which sets what `/api/traces` can show |
+| `ENERGY_ENABLE_DOCS` | empty (off) | Whether to mount FastAPI's auto-generated docs (`/docs` / `/redoc` / `/openapi.json`). Only `1`/`true`/`yes`/`on` enables them; even then they stay behind JWT auth, and only these paths get a relaxed CSP to allow the CDN assets. Do not enable on a public deployment |
 
 **Before deploying publicly**: this project is designed for single-machine / intranet use. Public deployment needs at minimum (1) a changed default admin password, (2) an HTTPS reverse proxy, and (3) restricted access to `config/` and `.solve_cache/`.
 
@@ -429,7 +441,7 @@ TideShift/
 │   ├── echarts-NOTICE.txt               # ECharts upstream NOTICE (required by Apache-2.0 §4(d))
 │   └── zrender-BSD-3-Clause.txt         # license text for ZRender, embedded in ECharts
 ├── .env.example
-├── .github/workflows/ci.yml             # CI: fast suite on PRs / full nightly run + coverage
+├── .github/workflows/ci.yml             # CI: fast suite + repro + lint on PRs / full nightly run + coverage
 ├── LICENSE                              # MIT license for this project
 ├── THIRD_PARTY_NOTICES.md               # third-party components and license notices
 ├── requirements.txt / requirements-dev.txt / requirements.lock
@@ -576,7 +588,9 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8800/api/traces/<run
 | DR every day (**does not hold**) | 580,000 CNY/year | Contradicts actual Guangdong subsidy frequency |
 
 ### Load forecasting
-30-day measurement (dispatch day 2024-07-30): project XGBoost **3.12%** MAPE, naive baseline **3.01%** — **XGBoost loses to the naive baseline by 0.11 percentage points**, because the synthetic data is a deterministic daily profile plus 3% noise, so its regularity is extreme and a naive baseline naturally wins. Improvement direction: [Known limitations and roadmap](#known-limitations-and-roadmap).
+30-day measurement (dispatch day 2024-07-30): project XGBoost **3.12%** MAPE, **same-day** naive baseline **2.69%** — **XGBoost loses to the naive baseline by 0.43 percentage points**, because the synthetic data is a deterministic daily profile plus 3% noise, so its regularity is extreme and a naive baseline naturally wins. Improvement direction: [Known limitations and roadmap](#known-limitations-and-roadmap).
+
+> ⚠️ **Caliber note (corrected 2026-10-12)**: the two numbers must be **same-day, same-caliber**. This previously read "3.12%, slightly behind 3.01%, a 0.11 percentage-point gap" — but 3.01% was a **three-day mean** of the test set computed by `train()` *before the dispatch day is even known* (07-27/07-28/07-29 = 3.04/3.12/2.87), while 3.12% is a **single-day** recursive forecast for 07-30. Subtracting a three-day baseline mean from a single-day model score understates the gap by roughly 4×. The same-caliber truth (both on 07-30) is **3.12% vs 2.69%, a 0.43 percentage-point gap**. `LoadForecastAgent.predict()` already returns the same-day baseline (`ForecastResult.baseline_mape`); recomputation: `docs/experiments.md` §2. **The direction is unchanged — XGBoost really does lose — but the gap is larger than previously stated.**
 > 📄 **Full experiment record: [`docs/experiments.md`](docs/experiments.md)** — item-by-item comparison of the three strategies, forecast ablation detail, LLM explanation evaluation, reproduction commands, and a **list of items not re-verified**. Any figure inherited from earlier records and not revalidated this round is flagged there separately; check that list before quoting.
 
 ## Testing
@@ -592,13 +606,15 @@ coverage run -m pytest -o addopts= && coverage report
 ```
 > ⚠️ **PowerShell users**: `pytest -m ""` does not work there — the shell drops the empty argument and pytest reports `argument -m: expected one argument`. Clear the `pytest.ini` default `-m "not slow"` with `-o addopts=` as above, or use the equivalent `pytest -m "slow or not slow" -q`. Under Bash / zsh, `pytest -m ""` is fine.
 
-Test scale is stated as a recomputable relation rather than a hardcoded total: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::` gives the fast tier and `pytest -o addopts= -q -m "slow" --collect-only | grep -c ::` gives the slow tier, the two summing to the total (measured as of 2026-10-07: **300 fast + 39 slow = 339 items**, of which 9 are `eval`-marked agent-behaviour evaluations; the baseline HEAD `29ab809` gives 328, the delta being 5 tests in `tests/test_experiments_repro.py`, 3 cache-buster / delivery assertions in `tests/test_web_assets.py` and 3 guards in `tests/test_capture_tool.py`), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 9 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 330 (339 − 9, same formula) that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
+Test scale is stated as a recomputable relation rather than a hardcoded total: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::` gives the fast tier and `pytest -o addopts= -q -m "slow" --collect-only | grep -c ::` gives the slow tier, the two summing to the total (measured as of 2026-10-12: **405 fast + 39 slow = 444 items**, of which 9 are `eval`-marked agent-behaviour evaluations; the 1.2.3 figure was 300 + 39 = 339, the +105 coming from the four new test files added by this round's security and engineering fixes plus expansions of three existing ones), all real assertions with no placeholder cases. `slow` tests really run MILP solves and full flows and take minutes, so PR CI skips them by default and the full suite runs nightly and on manual trigger. The count is self-checkable: `pytest -o addopts= -q -m "not slow" --collect-only | grep -c ::`. Those 9 `eval` items measure "did the agent get the task right" (task success rate, tool selection, number fidelity, guard catch rate), kept separate from the other 435 (444 − 9, same formula) that measure "did the code run as designed" — the first all green says nothing about the second regressing; see [`evals/`](evals/README.md).
+
+> **The `repro` channel (new in 1.2.4)**: `tests/test_experiments_repro.py` now carries both the `slow` and `repro` markers, and CI has a `repro-tests` job alongside `fast-tests` / `full-tests` (`pytest -m repro`, about 60 s, on every PR). The reason it exists: the default channel `-m "not slow"` is **completely blind to physical-constant changes**. Measured — flipping `soc_min` from 0.20 to 0.15 left all 300 fast tests green, with only 4 going red, and those 4 all sit outside the default channel. There are now two layers: the constants themselves are pinned in the fast tier by `tests/test_physics_constants.py` (change one number and it goes red), while result drift (solver upgrade, numerical-kernel change, tariff-calendar edit) is caught by this channel.
 
 **Release gate = full `pytest` in CI.** The workflow has `workflow_dispatch`, so the full suite (including `slow`) can be triggered from the Actions page as the standard pre-release regression; if your machine cannot run pytest inside a restricted sandbox, use that entry point rather than substituting a weaker verification. **This gate was actually exercised for v1.0.0**: 247 tests green, the `pytest -m ""` step took 846 s (`ubuntu-latest` / Python 3.13). That figure is the measured step time under the layout in effect then, where pytest ran twice - once bare and once under coverage; the duplicate pass has since been merged away, so it is a measurement of that run, not a prediction for the current one. **1.1.0 cleared the same gate**: `277 passed in 796.12s` (job wall 836 s, coverage 82%), with the paired `fast-tests` reporting `244 passed, 33 deselected in 50.45 s`. One thing to record honestly: this gate **used to print no count and no timing at all**, because the command's `-q` stacks on the `-q` already in `pytest.ini` and `-qq` swallows the summary line - so the first run had its 277 confirmed by counting progress dots (72x3 + 61) rather than reading a summary. The duplicate `-q` is now removed and re-verified, which is where the numbers above come from; quote 796 s (tests only) rather than 836 s (the job also covers checkout and install). If `tests/test_server_api.py` fails on its very first case with `PermissionError: [WinError 10013]`, that is the sandbox blocking the loopback `socketpair()` that `TestClient` depends on — an environment constraint, not a project defect; the test is whether the file passes on its own (`pytest tests/test_server_api.py -q`), and CI on `ubuntu-latest` is unaffected.
 
 The nightly also runs an `llm-eval` job with `--mode llm`, **but only if the repository has `Secrets.DEEPSEEK_API_KEY` configured**; without it the job states plainly that it skipped (a notice, never a green tick pretending something was measured). It is **not a gate**: the committed baseline is the rule-mode one, cross-mode denominators differ and real-model metrics move with sampling, so a red `llm-eval` means the endpoint/credentials/flow itself broke, while metric drift is read from the `llm-latest.md` artifact it uploads. Cost: about 6 minutes and 165k tokens.
 
-The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qingfeng092802/TideShift`, defined in `.github/workflows/ci.yml`): PRs and pushes to main run the fast suite (skipping slow), daily 18:00 UTC (02:00 Beijing) and manual triggers run the full suite with coverage. **Release gate = a passing manually triggered full regression** (Actions → tests → Run workflow). CI uses Python 3.13, and `.python-version`, `requirements.lock` and CI are kept on the same version caliber.
+The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qingfeng092802/TideShift`, defined in `.github/workflows/ci.yml`): PRs and pushes to main run the fast suite (skipping slow), the `repro-tests` channel (physical constants / solver regression) and `lint` (ruff + mypy); daily 18:00 UTC (02:00 Beijing) and manual triggers run the full suite with coverage. **Release gate = a passing manually triggered full regression** (Actions → tests → Run workflow). CI uses Python 3.13, and `.python-version`, `requirements.lock` and CI are kept on the same version caliber.
 
 | Test file | Coverage |
 |----------|----------|
@@ -609,17 +625,21 @@ The Tests badge at the top reflects real CI status (the `ci.yml` workflow of `qi
 | `test_llm_explainer.py` | Explanation layer: digest / number back-check / degradation / mocks |
 | `test_chat_agent.py` | Chat agent tool functions |
 | `test_auth_security.py` | JWT / passwords / Chinese-username boundary cases |
-| `test_cache_security.py` | Cache signature verification / allowlist / LRU |
-| `test_server_api.py` | API auth / forced first-login password change / rate limiting / SSRF |
+| `test_cache_security.py` | Cache signature verification / allowlist / LRU / **filename path traversal** (43 items) |
+| `test_server_api.py` | API auth / forced first-login password change / rate limiting / SSRF / **`date` input validation** (33 items) |
+| `test_physics_constants.py` | Absolute-value guards on physical constants and tariff caliber (fast tier, no MILP; 16 items, including the conservativeness property that degradation cost must not fall below the physical caliber) |
+| `test_packaging.py` | `pyproject.toml` installability: single version source, dependencies sharing one source with `requirements.txt`, both `pip install -e .` entry points (14 items) |
+| `test_dr_revenue_caliber.py` | DR revenue decision uses the **same caliber** as the degradation model: subsidy/degradation/net-revenue identity closes, and a zero response must never be judged profitable (7 items) |
 | `test_models_boundaries.py` | Numeric boundaries (division by zero / NaN / thermal model last point) |
 | `test_alerts_propagation.py` | Alert fields propagated end to end |
 | `test_evals.py` | The evaluation layer itself: denominators of the four dimensions, whether stubbing really blocks MILP, case-file integrity (31 items, no solver, no network) |
 | `test_evals_run.py` | Uses the evaluation layer on the agents: task success, number fidelity, side-effect guard, regression against `reports/baseline.json` (`eval + slow`) |
 | `test_parameter_search.py` | The four guardrails of the search agent (temperature violations not selectable, coarse-resolution numbers kept out of conclusions, budget and time limit, noise is not a win) + 1 real MILP run |
 | `test_trace.py` | Trace thread isolation, per-level redaction, decorator signature preservation, `/api/traces` auth and `run_id` never used as a path, caliber reported back, terminal status on abandoned streams, sidebar/renderer/section wiring (22 items) |
-| `test_web_assets.py` | Frontend wiring conventions: every local css/js carries `?v=`, the cache key equals `__version__`, referenced files exist (9 items) |
+| `test_web_assets.py` | Frontend wiring conventions: every local css/js carries `?v=`, the cache key equals `__version__`, referenced files exist, `node --check` syntax, the frontend must not hardcode degradation coefficients (21 items) |
 | `test_review_fixes.py` | Backend security/robustness regressions: static extension whitelist, JWT UA fingerprint, login rate-limiter LRU cap, HSTS/CSP headers, unified DELETE semantics, upload temp-file path (10 items, no MILP) |
 | `test_dr_thermal_overshoot.py` | DR thermal check must cover thermal inertia overshoot **after** the event window (a missed case historically: 48.9 ℃ past the 45 ℃ derating line) (2 items) |
+| `test_experiments_repro.py` | Real-MILP regression reproducing the five README headline numbers (`slow + repro`; CI has a dedicated `repro-tests` job; 5 items) |
 
 ## FAQ
 
