@@ -9,16 +9,21 @@
 2. 用能底线校验：削峰响应不能低于用户生产工艺最低用电负荷
 3. 收益校验：响应收益与电池衰减成本对比，净收益为正则响应
 """
-from src.utils.logger import get_logger
-log = get_logger(__name__)
 import copy
+from dataclasses import dataclass
+from typing import Dict
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List
-from src.utils.config import CONFIG, active_config
-from src.models.battery_thermal_model import BatteryThermalModel, estimate_temperature_rise
+
 from src.models.battery_degradation_model import BatteryDegradationModel
+from src.models.battery_thermal_model import BatteryThermalModel
+from src.utils.config import active_config
+from src.utils.logger import get_logger
+
+# 原先这行夹在两组 import 之间（`log = get_logger(...)` 在第 13 行、其余 import
+# 在它之后），ruff 的 E402 会为后面每一行报"模块级 import 不在文件顶部"。
+log = get_logger(__name__)
 
 # 此前 DR 里硬写两处 50（最低有效响应功率），config.price.dr_min_response_kw
 # 声明后零引用。收敛为具名常量并注释语义（值保持 50 不变，避免行为变更）。
@@ -80,11 +85,15 @@ class DemandResponseAgent:
         2. 三重可行性校验（热安全、用能底线、收益）
         3. 计算最优响应功率
         4. 生成调整后的策略
+
+        注：第 2 步里的收益校验排在热/用能之后、且要等第 4 步的
+        adjusted_power 出来才做——它需要用同一个衰减模型对"基础调度"与
+        "响应后调度"两条 SOC 轨迹做差分，而目标功率会先被热安全与用能底线
+        两次降额，只有最终功率才能反映真实收益。
         """
         # 拷贝输入信号，避免热降额/用能底线调整时污染调用方对象
         dr_signal = copy.deepcopy(dr_signal)
 
-        n = len(base_schedule_power)
         dt = self.battery_cfg.time_step_hours
 
         # 1. 确定响应时段索引
@@ -155,27 +164,7 @@ class DemandResponseAgent:
             dr_signal.target_reduction_kw = adjusted_target
             feasibility["energy_floor"]["note"] = f"目标削减功率过高，调整为{adjusted_target:.0f}kW"
 
-        # 4. 收益校验
-        revenue_check = self._check_dr_revenue(
-            dr_indices, dr_signal, current_soc, ambient_temp_profile,
-        )
-        feasibility["revenue"] = revenue_check
-
-        if not revenue_check["profitable"]:
-            return DRResponse(
-                accepted=False,
-                reason=f"收益校验失败：DR净收益为负（{revenue_check['net_revenue']:.2f}元）",
-                adjusted_power_kw=base_schedule_power.copy(),
-                response_power_kw=0,
-                response_energy_kwh=0,
-                subsidy_revenue_yuan=0,
-                degradation_cost_yuan=0,
-                net_dr_revenue_yuan=0,
-                max_temp_during_dr_c=thermal_check["estimated_max_temp"],
-                feasibility_check=feasibility,
-            )
-
-        # 5. 计算最优响应功率（考虑热约束、SOC约束后的最大可响应功率）
+        # 4. 计算最优响应功率（考虑热约束、SOC约束后的最大可响应功率）
         # SOC约束：DR期间额外放电量不能超过可用容量
         duration_hours = len(dr_indices) * dt
         # 计算base_schedule在DR期间已经计划的放电量
@@ -218,7 +207,7 @@ class DemandResponseAgent:
                 feasibility_check=feasibility,
             )
 
-        # 6. 生成调整后的策略
+        # 5. 生成调整后的策略
         adjusted_power = base_schedule_power.copy()
         for idx in dr_indices:
             if dr_signal.dr_type == "peak_shaving":
@@ -236,25 +225,38 @@ class DemandResponseAgent:
                 target_power = max(target_power, -self.battery_cfg.rated_power_kw)
                 adjusted_power[idx] = target_power
 
-        # 7. 计算实际响应量和收益
-        response_power = float(np.mean([
-            adjusted_power[i] - base_schedule_power[i] for i in dr_indices
-        ]))
-        response_energy = float(np.sum([
-            abs(adjusted_power[i] - base_schedule_power[i]) for i in dr_indices
-        ]) * dt)
-        subsidy_revenue = response_energy * dr_signal.subsidy_per_kwh
-
-        # 额外衰减成本
-        base_deg = self.degradation_model.compute_degradation_from_power(
-            base_schedule_power, initial_soc=current_soc
+        # 5. 收益校验
+        # 排在这里而不是热/用能校验之间：只有拿到了真正要执行的 adjusted_power，
+        # 才能用与 MILP 目标函数同一个衰减模型，对"基础调度"与"响应后调度"
+        # 两条 SOC 轨迹做差分。原先这一步排在前面（那时 adjusted_power 还不存在），
+        # 只能用 target_reduction_kw × 0.8（假设响应率）× 1.5（硬编码区间系数）
+        # 另立一套估算——同一份衰减在 MILP、DR 判定、最终报表里竟有三种算法，
+        # 且 DR 判定这套用的常数优化器根本看不见。
+        revenue_check = self._check_dr_revenue(
+            dr_indices, dr_signal, base_schedule_power, adjusted_power, current_soc,
         )
-        adj_deg = self.degradation_model.compute_degradation_from_power(
-            adjusted_power, initial_soc=current_soc
-        )
-        extra_degradation_cost = adj_deg.degradation_cost_yuan - base_deg.degradation_cost_yuan
+        feasibility["revenue"] = revenue_check
 
-        net_dr_revenue = subsidy_revenue - extra_degradation_cost
+        if not revenue_check["profitable"]:
+            return DRResponse(
+                accepted=False,
+                reason=f"收益校验失败：DR净收益为负（{revenue_check['net_revenue']:.2f}元）",
+                adjusted_power_kw=base_schedule_power.copy(),
+                response_power_kw=0,
+                response_energy_kwh=0,
+                subsidy_revenue_yuan=0,
+                degradation_cost_yuan=0,
+                net_dr_revenue_yuan=0,
+                max_temp_during_dr_c=thermal_check["estimated_max_temp"],
+                feasibility_check=feasibility,
+            )
+
+        # 6. 汇总响应量与收益（数值已在 _check_dr_revenue 里算好，不再重复一次差分）
+        response_power = revenue_check["response_power_kw"]
+        response_energy = revenue_check["response_energy_kwh"]
+        subsidy_revenue = revenue_check["estimated_subsidy"]
+        extra_degradation_cost = revenue_check["estimated_degradation"]
+        net_dr_revenue = revenue_check["net_revenue"]
 
         # DR期间最高温度
         dr_temps = thermal_check["temp_profile"][dr_indices] if "temp_profile" in thermal_check else []
@@ -279,7 +281,6 @@ class DemandResponseAgent:
     ) -> Dict:
         """热安全校验"""
         dt = self.battery_cfg.time_step_hours
-        duration_hours = len(dr_indices) * dt
 
         # 估算DR期间的最大功率
         max_power_during_dr = max(
@@ -287,12 +288,10 @@ class DemandResponseAgent:
             self.battery_cfg.rated_power_kw * 0.5,
         )
 
-        # 估算稳态温升
-        estimated_temp = estimate_temperature_rise(
-            max_power_during_dr, duration_hours,
-            ambient_temp=np.mean(ambient_temp[dr_indices]),
-            initial_temp=current_temp,
-        )
+        # 这里原先还调了一次 estimate_temperature_rise 算"稳态温升"，
+        # 但结果从未被读过——下面就用热模型逐步仿真出整条温度剖面了，
+        # 稳态估算被完全取代。删掉这次白算（它在每个 DR 事件里都跑一遍）。
+        # 需要稳态口径时直接用 estimate_temperature_rise，不必在这里留一份死值。
 
         # 更精确的仿真
         self.thermal_model.reset(current_temp)
@@ -363,28 +362,58 @@ class DemandResponseAgent:
         }
 
     def _check_dr_revenue(
-        self, dr_indices, dr_signal, current_soc, ambient_temp,
+        self, dr_indices, dr_signal, base_power, adjusted_power, current_soc,
     ) -> Dict:
-        """收益校验：DR补贴收益 > 额外衰减成本"""
-        dt = self.battery_cfg.time_step_hours
-        duration_hours = len(dr_indices) * dt
+        """收益校验：DR补贴收益 > 额外衰减成本。
 
-        # 估算响应电量
-        response_energy = dr_signal.target_reduction_kw * duration_hours * 0.8  # 假设80%响应率
+        衰减成本不再是估算常数，而是把"基础调度"与"响应后调度"两条功率曲线
+        分别喂给 `BatteryDegradationModel`，取两者 `degradation_cost_yuan` 之差。
+        这样 DR 判定用的就是 MILP 目标函数里那一套（`unit_cost =
+        total_cost / (2 × Cap × cycle_life)` + SOC 区间加权），三处口径合一：
+        优化器认为划算的方案，DR 判定不会再因为另一套常数把它拒掉。
+
+        参数：
+            dr_indices: DR 时段在 96 点序列里的下标
+            dr_signal: DR 信号（已按热/用能底线降额）
+            base_power: 基础调度功率（正放电负充电）
+            adjusted_power: 响应后功率
+            current_soc: 当前 SOC（两条轨迹的同一初值）
+        """
+        dt = self.battery_cfg.time_step_hours
+
+        response_power = float(np.mean([
+            adjusted_power[i] - base_power[i] for i in dr_indices
+        ]))
+        response_energy = float(np.sum([
+            abs(adjusted_power[i] - base_power[i]) for i in dr_indices
+        ]) * dt)
         subsidy_revenue = response_energy * dr_signal.subsidy_per_kwh
 
-        # 估算衰减成本（大功率放电衰减更大）
-        # 简化：响应期间的等效循环增加
-        extra_cycles = response_energy / (self.battery_cfg.rated_capacity_kwh * 2) * 1.5
-        degradation_cost = (extra_cycles / self.battery_cfg.cycle_life *
-                           self.battery_cfg.total_battery_cost)
+        base_deg = self.degradation_model.compute_degradation_from_power(
+            base_power, initial_soc=current_soc
+        )
+        adj_deg = self.degradation_model.compute_degradation_from_power(
+            adjusted_power, initial_soc=current_soc
+        )
+        # 显式 float()：模型的 degradation_cost_yuan 是 np.float64，
+        # 不转的话 net_revenue / profitable 会分别变成 np.float64 / np.bool_，
+        # 而 np.bool_ 不是 bool 的子类——它们会一路渗进 feasibility_check
+        # 并被缓存序列化，进而出现在接口返回值里（numpy 标量不是 JSON 原生类型）。
+        degradation_cost = float(
+            adj_deg.degradation_cost_yuan - base_deg.degradation_cost_yuan
+        )
 
         net_revenue = subsidy_revenue - degradation_cost
-        profitable = net_revenue > 0
+        profitable = bool(net_revenue > 0)
 
         return {
             "profitable": profitable,
             "estimated_subsidy": round(subsidy_revenue, 2),
             "estimated_degradation": round(degradation_cost, 2),
             "net_revenue": round(net_revenue, 2),
+            # 下面两项一并返回，避免调用方为了写 DRResponse 再把两条 SOC 轨迹
+            # 差分一遍（差分才是这里唯一有成本的部分）。取值精度与
+            # DRResponse 对应字段一致，故调用方再 round 一次是幂等的。
+            "response_power_kw": round(response_power, 1),
+            "response_energy_kwh": round(response_energy, 1),
         }
