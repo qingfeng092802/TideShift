@@ -10,11 +10,42 @@
 - 将每次充放电的能量按SOC区间加权，得到等效循环次数
 - 等效循环次数 / 总循环寿命 = 寿命损耗比例
 - 寿命损耗比例 × 电池总成本 = 衰减成本
+
+⚠️ 关于分母 `cycle_life` 的口径（P2.4 专项说明，别照着"常识"改）
+------------------------------------------------------------------
+分子是**按 SOC 区间加权后**的等效循环 `Σ(区间系数 × |ΔSOC|) / 2`，
+分母是 **80%DoD 标称的 6000 次**。这两个口径严格来说不同源，代码注释
+历史上只写了"偏保守"三个字，没说保守多少，也没说清"按 100%DoD 改成
+4000 才是对的"这句话为什么是错的。这里把实测数写清楚：
+
+寿命-深度关系按 80%DoD=6000 与 100%DoD=4000 两个锚点反解幂律
+`L(d) = 4000 · d^(-k)`，`k = ln(6000/4000) / ln(1/0.8) = 1.8171`。
+
+在本项目的实际运行窗口 `soc_min=0.20 / soc_max=0.90`（DoD=0.70）下：
+- 本模型：一个完整充放循环计入 `equivalent_cycles = 0.9520`，
+  成本 `0.9520 / 6000 × 1600000 = 253.87 元/循环`；
+- 物理口径：`L(0.70) = 7648 次`，成本 `1600000 / 7648 = 209.22 元/循环`；
+- 两者之比 **1.21 —— 本模型偏保守（高估衰减成本）**。
+
+把分母换成 4000 会让保守度从 1.21 升到 **1.82 倍**，每循环成本从
+253.87 涨到 380.80 元，方向与"改小分母＝更准"的直觉相反：分母变小＝
+寿命更短＝每次循环更贵＝更容易把本来赚钱的需求响应判成不划算。
+`Σ区间系数` 这一项（实际窗口下的加权倍数 1.425）本身就超过了
+6000-vs-4000 的差异，所以现行口径在所有 DoD 上都是保守的
+（DoD 0.2~1.0 实测保守度 1.17~3.10 倍）。
+
+保守性由 `tests/test_physics_constants.py::test_degradation_is_conservative_vs_physical`
+钉住：若哪天有人把分子改成不加权的 `|ΔSOC|/2`，或把分母改成 4000，
+那条用例会失败并指出这里该重算。函数 `physical_lifetime_cycles()` 只用于
+这条审计，**不在成本计算路径上**。
 """
-import numpy as np
+import math
 from dataclasses import dataclass
-from typing import List, Tuple
-from src.utils.config import CONFIG, active_config
+from typing import Tuple
+
+import numpy as np
+
+from src.utils.config import active_config
 
 
 @dataclass
@@ -103,9 +134,11 @@ class BatteryDegradationModel:
         throughput_kwh = np.sum(abs_delta_soc) * self.cfg.rated_capacity_kwh
 
         # 衰减比例 = 等效循环次数 / 标称循环寿命
-        # 注意：标称循环寿命是80%DoD下的，等效到100%DoD需要修正
-        # 经验：80%DoD循环6000次 ≈ 100%DoD循环约4000次（衰减非线性）
-        # 简化处理：直接用等效循环次数 / 标称寿命，偏保守
+        # 分子已按 SOC 区间加权（上面 weighted_delta），分母是 80%DoD 标称寿命。
+        # 两者口径不同源，但实测结论是**偏保守**——实际窗口 DoD=0.70 下本模型
+        # 253.87 元/循环 vs 物理口径 209.22 元/循环（1.21 倍）。
+        # 不要按"100%DoD 应该是 4000 次"把分母改小：那会把保守度推到 1.82 倍，
+        # 反而更容易把赚钱的需求响应判成不划算。完整推导见模块 docstring。
         degradation_ratio = equivalent_cycles / self.cfg.cycle_life
 
         # 衰减成本
@@ -185,8 +218,26 @@ class BatteryDegradationModel:
         weighted_cycles = equivalent_cycles * coeff
 
         # 衰减成本
+        # 分母口径同 compute_degradation_from_soc_trajectory：80%DoD 标称寿命
+        # 配区间加权分子，实测偏保守。见模块 docstring 的推导，别单独改这里。
         degradation_ratio = weighted_cycles / self.cfg.cycle_life
         return degradation_ratio * self.cfg.total_battery_cost
+
+
+def physical_lifetime_cycles(dod: float, life_at_80: float = 6000.0,
+                             life_at_100: float = 4000.0) -> float:
+    """按幂律寿命-深度关系反解给定 DoD 下的循环寿命（审计用，不在成本路径上）。
+
+    两个锚点（80%DoD=6000 次、100%DoD=4000 次）定出 `L(d) = life_at_100 · d^(-k)`，
+    `k = ln(life_at_80 / life_at_100) / ln(1 / 0.8)`。本项目取值下 k ≈ 1.8171。
+
+    存在的唯一目的是让"本模型的衰减成本是否偏保守"这条性质可以被测试断言，
+    而不是只写在注释里。生产代码不应调用它。
+    """
+    if not 0 < dod <= 1.0:
+        raise ValueError(f"放电深度必须在 (0, 1] 内，收到 {dod}")
+    k = math.log(life_at_80 / life_at_100) / math.log(1.0 / 0.8)
+    return life_at_100 * dod ** (-k)
 
 
 def calculate_lifetime_extension(
