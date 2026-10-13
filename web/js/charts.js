@@ -35,11 +35,63 @@ function mountChart(el, option) {
   const inst = echarts.init(el, null, { renderer: "canvas" });
   inst.setOption(option);
   State.charts.push(inst);
+  el.__chart = inst;
+  const ro = _ensureChartObserver();
+  if (ro) ro.observe(el);
   return inst;
 }
 
+/* 图表尺寸跟随容器变化。
+   此前侧栏折叠 / 对话面板开合 / 主题切换后，靠三处各自独立的
+   `setTimeout(reflowCharts, 300)` 猜一个"CSS 过渡应该结束了"的延时：
+   过渡时长一改就错位，新增一处布局变化就多一处遗漏，而且 300ms 内
+   用户看到的仍是旧尺寸的图。ResizeObserver 直接观察每个图容器，
+   布局真正落定后回调，不依赖任何魔法数字，也覆盖了窗口 resize
+   之外的容器变化（侧栏宽度、tabpane 显隐、字号变化）。
+   用单个 observer 观察全部图容器，避免每张图一个实例。 */
+let _chartRO = null;
+const _chartSizes = new WeakMap();
+
+function _ensureChartObserver() {
+  if (_chartRO) return _chartRO;
+  if (typeof ResizeObserver === "undefined") return null;   // 老浏览器：退回 reflowCharts()
+  _chartRO = new ResizeObserver((entries) => {
+    for (const en of entries) {
+      const el = en.target;
+      const box = en.contentRect;
+      const prev = _chartSizes.get(el);
+      // 尺寸没变就不 resize：ResizeObserver 在同一观察周期内可能对同一元素
+      // 重复回调，而 ECharts 的 resize() 是同步布局操作，不去重会在拖拽侧栏时压满主线程
+      if (prev && prev.w === box.width && prev.h === box.height) continue;
+      _chartSizes.set(el, { w: box.width, h: box.height });
+      const inst = el.__chart;
+      // 0 尺寸 = 容器被隐藏（tabpane 未激活），此时 resize 无意义且会告警
+      if (!inst || box.width <= 0 || box.height <= 0) continue;
+      requestAnimationFrame(() => { try { inst.resize(); } catch (e) { /* 已销毁 */ } });
+    }
+  });
+  return _chartRO;
+}
+
+/* 销毁实例时解除观察，否则 observer 会一直持有已移除的 DOM 节点 */
+function unmountChart(inst) {
+  if (!inst) return;
+  const el = inst.getDom ? inst.getDom() : null;
+  if (el) {
+    if (_chartRO) _chartRO.unobserve(el);
+    _chartSizes.delete(el);
+    try { delete el.__chart; } catch (e) { el.__chart = null; }
+  }
+  try { inst.dispose(); } catch (e) { console.warn("[unmountChart]", e); }
+}
+
+/* 是否已有 ResizeObserver 接管尺寸跟随——调用方据此决定要不要退回定时器兜底 */
+function hasChartObserver() {
+  return typeof ResizeObserver !== "undefined";
+}
+
 function reflowCharts() {
-  requestAnimationFrame(() => State.charts.forEach((c) => c.resize()));
+  requestAnimationFrame(() => State.charts.forEach((c) => { try { c.resize(); } catch (e) { /* 已销毁 */ } }));
 }
 
 /* 删除 priceBands 死代码——该函数硬编码 7 段电价时段且从未被任何图表

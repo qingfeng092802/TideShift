@@ -3,11 +3,39 @@
 
 const TONE = { ok: "var(--success)", warning: "var(--warning)", danger: "var(--danger)", flat: "var(--text-2)" };
 
-/* 引擎参数唯一来源：/api/bootstrap 的 engine_config，展示层禁止硬编码 */
+/* 引擎参数唯一来源：/api/bootstrap 的 engine_config，展示层禁止硬编码。
+   后端未下发时（老版本后端 / 离线静态预览 / bootstrap 失败）一律显示 "—"，
+   不再内联一份"看起来对"的副本——那是第二套口径，且没有任何测试守着它同步。
+   历史：此处曾硬编码 { capacity_kj_k: 15000, resistance_k_w: 0.001,
+   internal_resistance_mohm: 18, efficiency_pct: 95, temp_normal_max: 45,
+   temp_safe_max: 55 }，与 src/utils/config.py 同值但无人守，而上一行的注释
+   恰好写着"禁止硬编码"。 */
 function engineCfg() {
-  const fb = { thermal: { capacity_kj_k: 15000, resistance_k_w: 0.001, internal_resistance_mohm: 18, efficiency_pct: 95, temp_normal_max: 45, temp_safe_max: 55 },
-               price_periods: [] };
-  return (State.boot && State.boot.engine_config) || fb;
+  return (State.boot && State.boot.engine_config) || { thermal: {}, degradation: {}, price_periods: [] };
+}
+
+/* 读热参数并拼单位：缺失时给 "—"。用 "—" 而不是抄一份常数，
+   是因为页面上的数字要么来自引擎、要么明说没有，不该有第三种来源。 */
+function thermalVal(key, unit) {
+  const v = (engineCfg().thermal || {})[key];
+  return (v === undefined || v === null || v === "") ? "—" : `${v}${unit}`;
+}
+
+/* SOC 区间衰减系数：键序固定为低→高，与后端 degradation_coeff 同一张表。
+   后端未下发时返回 null（而不是 0 或一份抄来的常数）——0 会被读成"这个区间不衰减"，
+   与"没有数据"是完全不同的两句话。调用方负责把 null 显示成 "—"。 */
+const SOC_BANDS = [
+  { key: "0.0-0.2", label: "0-20%" },
+  { key: "0.2-0.5", label: "20-50%" },
+  { key: "0.5-0.8", label: "50-80%" },
+  { key: "0.8-1.0", label: "80-100%" },
+];
+function socDegradationCoeffs() {
+  const c = (engineCfg().degradation || {}).soc_coeff || {};
+  return SOC_BANDS.map((b) => {
+    const v = c[b.key];
+    return (v === undefined || v === null || v === "") ? null : Number(v);
+  });
 }
 
 /* ---------- 共享：顶部操作栏 ---------- */
@@ -576,12 +604,12 @@ function renderThermal(root, d) {
         <div class="panel-title">一阶RC热模型</div>
         <div style="font-family:JetBrains Mono,monospace;font-size:10px;color:var(--text-3);margin-bottom:10px;">
           C·dT/dt = I²R + Q_reaction - (T-T_amb)/R_th</div>
-        <div class="metric-row"><span class="metric-label">热容 C</span><span class="metric-value">${engineCfg().thermal.capacity_kj_k} kJ/K</span></div>
-        <div class="metric-row"><span class="metric-label">热阻 R_th</span><span class="metric-value">${engineCfg().thermal.resistance_k_w} K/W</span></div>
-        <div class="metric-row"><span class="metric-label">内阻 R</span><span class="metric-value">${engineCfg().thermal.internal_resistance_mohm} mΩ</span></div>
+        <div class="metric-row"><span class="metric-label">热容 C</span><span class="metric-value">${thermalVal("capacity_kj_k", " kJ/K")}</span></div>
+        <div class="metric-row"><span class="metric-label">热阻 R_th</span><span class="metric-value">${thermalVal("resistance_k_w", " K/W")}</span></div>
+        <div class="metric-row"><span class="metric-label">内阻 R</span><span class="metric-value">${thermalVal("internal_resistance_mohm", " mΩ")}</span></div>
         <div class="metric-row"><span class="metric-label">环境温度</span><span class="metric-value">${d.ambient_mean.toFixed(1)}℃</span></div>
-        <div class="metric-row"><span class="metric-label">降额阈值</span><span class="metric-value" style="color:var(--accent);">${engineCfg().thermal.temp_normal_max}℃</span></div>
-        <div class="metric-row"><span class="metric-label">停止阈值</span><span class="metric-value" style="color:var(--danger);">${engineCfg().thermal.temp_safe_max}℃</span></div>
+        <div class="metric-row"><span class="metric-label">降额阈值</span><span class="metric-value" style="color:var(--accent);">${thermalVal("temp_normal_max", "℃")}</span></div>
+        <div class="metric-row"><span class="metric-label">停止阈值</span><span class="metric-value" style="color:var(--danger);">${thermalVal("temp_safe_max", "℃")}</span></div>
       </div>
       <div class="chart-card"><div class="chart" id="th-decay" style="height:230px;"></div></div>
     </div>
@@ -594,7 +622,7 @@ function renderThermal(root, d) {
   $("#th-scope", root).addEventListener("change", (e) => {
     State.thermalScope = scopes[e.target.value];
     // 重绘温度/负荷/功率三个图的范围
-    State.charts.forEach((c) => c.dispose()); State.charts = [];
+    State.charts.forEach(unmountChart); State.charts = [];
     mountThermalCharts(root, d);
   });
   // 页内 tabs（复用 bindSubTabs，删除重复实现）
@@ -613,9 +641,15 @@ function mountThermalCharts(root, d) {
     y: [r.arbitrage_revenue_yuan, r.dr_subsidy_yuan, -r.degradation_cost_yuan],
     total: r.net_revenue_yuan,
   }, true);
-  chartHBar($("#th-decay", root), ["0-20%", "20-50%", "50-80%", "80-100%"], [3.0, 1.5, 1.0, 1.8], {
-    title: "SOC区间寿命衰减系数", showX: true, max: 3.6,
-    fmt: (v) => v.toFixed(1) + "x",
+  const decay = socDegradationCoeffs();
+  const decayKnown = decay.filter((v) => v !== null);
+  // 系数缺失（后端没下发）时图上明说"引擎参数未下发"，而不是拿一份前端抄来的
+  // 常数顶上去——那是第二套口径的入口。图题由 ECharts 画，故加在这里。
+  chartHBar($("#th-decay", root), SOC_BANDS.map((b) => b.label), decay, {
+    title: decayKnown.length ? "SOC区间寿命衰减系数" : "SOC区间寿命衰减系数（引擎参数未下发）",
+    showX: true,
+    max: Math.max(3.6, ...decayKnown) * 1.2,
+    fmt: (v) => (v === null || v === undefined ? "—" : v.toFixed(1) + "x"),
   });
   reflowCharts();
 }
@@ -888,10 +922,10 @@ const fmtPath = (f) => { const m = /\(([^)]+)\)/.exec(String(f || "")); return m
             <input type="range" id="p-power" min="500" max="2000" step="100" value="${p.rated_power}"></div>
         </div>
         <div class="ro-grid">
-          <div class="metric-row"><span class="metric-label">充放电效率</span><span class="metric-value">${engineCfg().thermal.efficiency_pct}%</span></div>
-          <div class="metric-row"><span class="metric-label">热容 C</span><span class="metric-value">${engineCfg().thermal.capacity_kj_k} kJ/K</span></div>
-          <div class="metric-row"><span class="metric-label">热阻 R_th</span><span class="metric-value">${engineCfg().thermal.resistance_k_w} K/W</span></div>
-          <div class="metric-row"><span class="metric-label">内阻 R</span><span class="metric-value">${engineCfg().thermal.internal_resistance_mohm} mΩ</span></div>
+          <div class="metric-row"><span class="metric-label">充放电效率</span><span class="metric-value">${thermalVal("efficiency_pct", "%")}</span></div>
+          <div class="metric-row"><span class="metric-label">热容 C</span><span class="metric-value">${thermalVal("capacity_kj_k", " kJ/K")}</span></div>
+          <div class="metric-row"><span class="metric-label">热阻 R_th</span><span class="metric-value">${thermalVal("resistance_k_w", " K/W")}</span></div>
+          <div class="metric-row"><span class="metric-label">内阻 R</span><span class="metric-value">${thermalVal("internal_resistance_mohm", " mΩ")}</span></div>
         </div>
       </div>
       <div class="panel-card">
@@ -1162,7 +1196,8 @@ const fmtPath = (f) => { const m = /\(([^)]+)\)/.exec(String(f || "")); return m
   prefCp.addEventListener("change", () => {
     document.documentElement.classList.toggle("compact", prefCp.checked);
     localStorage.setItem("compact", prefCp.checked ? "1" : "0");
-    setTimeout(reflowCharts, 300);
+    // 紧凑模式改的是全局间距，图表容器高度跟着变；有 ResizeObserver 时它自己会跟
+    if (!hasChartObserver()) setTimeout(reflowCharts, 300);
     toast(prefCp.checked ? "已切换为紧凑模式" : "已恢复标准间距", "ok");
   });
   // 参数滑杆

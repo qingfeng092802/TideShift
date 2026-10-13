@@ -128,20 +128,24 @@ const App = {
   },
 
   bindGlobal() {
+    // 侧栏折叠 / 对话面板开合会改变图表容器宽度。有 ResizeObserver 时
+    // charts.js 的 observer 会在布局真正落定后自己 resize，这里不再猜延时；
+    // 无 ResizeObserver 的老浏览器才退回"等 CSS 过渡结束"的兜底。
+    const afterLayout = () => { if (!hasChartObserver()) setTimeout(reflowCharts, 300); };
     $("#btn-sidebar").addEventListener("click", () => {
       $("#sidebar").classList.toggle("collapsed");
       syncSidebarTrack();
-      setTimeout(reflowCharts, 300);
+      afterLayout();
     });
     $("#btn-chat").addEventListener("click", () => {
       document.body.classList.add("chat-open");
       localStorage.setItem("chatPanelCollapsed", "0");
-      setTimeout(reflowCharts, 300);
+      afterLayout();
     });
     $("#btn-chat-close").addEventListener("click", () => {
       document.body.classList.remove("chat-open");
       localStorage.setItem("chatPanelCollapsed", "1");
-      setTimeout(reflowCharts, 300);
+      afterLayout();
     });
     $("#btn-theme").addEventListener("click", () => this.setTheme(State.theme === "dark" ? "light" : "dark"));
     // 对话
@@ -292,7 +296,9 @@ const App = {
   },
 
   disposeCharts() {
-    State.charts.forEach((c) => { try { c.dispose(); } catch (e) { console.warn("[disposeCharts]", e); } });
+    // 走 unmountChart 而不是裸 dispose：必须同时解除 ResizeObserver 的观察，
+    // 否则 observer 会一直持有已被替换掉的 DOM 节点（页面切换很频繁）。
+    State.charts.forEach(unmountChart);
     State.charts = [];
   },
 
@@ -411,8 +417,10 @@ const App = {
     this._lastLogLbl = null;
     const lg = $("#solve-log");
     if (lg) lg.innerHTML = "";
+    // 进度浮层收起后 pages-root 才从 display:none 变回可见——容器尺寸在这一刻
+    // 才确定。ResizeObserver 会因此收到一次回调；没有它时靠下一帧 + 一次延时兜底。
     reflowCharts();
-    setTimeout(reflowCharts, 120);
+    if (!hasChartObserver()) setTimeout(reflowCharts, 120);
   },
 };
 
@@ -534,29 +542,34 @@ window.__requireChangePassword = function (prefillOld) {
 })();
 
 Object.assign(App, {
+  /* 求解阶段时间线：唯一事实来源是 /api/bootstrap 的 solve_stages（后端由
+     STAGE_MAP 同表派生）。此前这里内联了 7 组百分比 + 文案 + 说明，与后端手工
+     对表且已经漂了一处：前端把"准备调度引擎"标在 3%（一开跑就算完成），而后端
+     3% 只是刚启动、25% 才是该阶段真正结束。
+     拿不到 solve_stages 时（老后端 / bootstrap 未返回）返回空数组，renderStages
+     会退化成"只显示主标签与进度条"，而不是回落到一份前端抄来的时间线。 */
+  solveStages() {
+    const s = (State.boot && State.boot.solve_stages) || [];
+    return Array.isArray(s) ? s : [];
+  },
   renderStages(pct) {
-    const stages = [
-      [3, "准备调度引擎"], [25, "负荷预测（XGBoost）"], [40, "MILP 优化求解（HiGHS）"],
-      [75, "需求响应叠加"], [85, "日报表汇总"], [92, "AI 决策解释"], [100, "全部完成"],
-    ];
-    const descs = [
-      "加载数据与电池参数，构建优化上下文",
-      "XGBoost 时序预测 · 96 点 15 分钟粒度",
-      "HiGHS 求解器 · 热安全 + 寿命约束联合优化",
-      "DR 事件评估与三重校验",
-      "收益构成与 SOC 轨迹汇总",
-      "规则模板 / LLM 生成决策解释",
-      "调度结果已生成，可查看各页看板",
-    ];
-    let cur = stages.findIndex(([p]) => pct < p);
+    const stages = this.solveStages();
+    const box = $("#solve-stages");
+    if (!box) return;
+    if (!stages.length) {
+      // 无时间线可画：留空比画一条编造的进度更诚实（主标签仍显示后端真实文案）
+      box.innerHTML = "";
+      return;
+    }
+    let cur = stages.findIndex((s) => pct < s.percent);
     if (cur === -1) cur = stages.length - 1;
-    $("#solve-stages").innerHTML = stages.map(([p, label], i) => {
-      const st = pct >= p ? "done" : i === cur ? "cur" : "todo";
+    box.innerHTML = stages.map((s, i) => {
+      const st = pct >= s.percent ? "done" : i === cur ? "cur" : "todo";
       const mark = st === "done" ? ico("check") : st === "cur" ? ico("play") : ico("circle");
-      return `<div class="tl-item ${st}"><span class="tl-ico">${mark}</span><b>${esc(label)}</b></div>`;
+      return `<div class="tl-item ${st}"><span class="tl-ico">${mark}</span><b>${esc(s.label)}</b></div>`;
     }).join("");
     const det = $("#solve-detail");
-    if (det) det.textContent = descs[cur];
+    if (det) det.textContent = stages[cur].desc || "";
   },
 
   /* ---------- 侧栏信息 ---------- */
@@ -771,9 +784,12 @@ try {
   if (localStorage.getItem("chatPanelCollapsed") === "0") document.body.classList.add("chat-open");
 } catch (e) {}
 
-/* P2：resize 防抖——拖拽窗口时不再每帧对全部 ECharts 实例调 resize() */
-let _resizeTimer;
-window.addEventListener("resize", () => { clearTimeout(_resizeTimer); _resizeTimer = setTimeout(reflowCharts, 150); });
+/* resize 兜底：有 ResizeObserver 时图表容器自己会跟着窗口变，这里不必再监听。
+   无 ResizeObserver 的老浏览器退回防抖版 reflowCharts（拖拽窗口时不再每帧 resize）。 */
+if (!hasChartObserver()) {
+  let _resizeTimer;
+  window.addEventListener("resize", () => { clearTimeout(_resizeTimer); _resizeTimer = setTimeout(reflowCharts, 150); });
+}
 /* P1：系统深浅色变化时跟随（仅当用户未手动设置过主题） */
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", (e) => {
   if (!localStorage.getItem("theme")) App.setTheme(e.matches ? "dark" : "light");
