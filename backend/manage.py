@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
 import auth as auth_mod  # noqa: E402
+
 from src.utils.config import CONFIG  # noqa: E402,F401  (触发配置加载，行为与运行时一致)
 
 
@@ -70,7 +71,7 @@ def cmd_show_state(_args) -> int:
         if state:
             print(f"  用户名            : {state.get('username', 'admin')}")
             print(f"  需首次改密        : {'是' if state.get('must_change') else '否'}")
-        print(f"ADMIN_INITIAL_PASSWORD: "
+        print("ADMIN_INITIAL_PASSWORD: "
               + ("已设置" if env_pwd else "未设置"))
         if env_pwd and os.path.exists(auth_path):
             print("                      ⚠️ 口令文件已存在，该环境变量**不会生效**"

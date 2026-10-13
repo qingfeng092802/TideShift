@@ -12,29 +12,36 @@
 2. 规则模式：无API Key时用关键词匹配，保证可演示
 """
 import re
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import pandas as pd
-from types import SimpleNamespace
-from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
 
-from src.utils.config import CONFIG, active_config, use_config
-from src.utils.logger import get_logger
-from src.utils.url_guard import normalize_llm_base_url
+from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
+from src.agents.demand_response_agent import DRSignal
+
 # 模块本身零重依赖（langchain 在工厂函数里才导入），所以这里可以直接引
 from src.agents.llm_stream_compat import chat_model_class as _chat_model_class
-from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
-from src.agents.storage_optimization_agent import StorageOptimizationAgent, ScheduleResult
-from src.agents.demand_response_agent import DRSignal
+from src.agents.storage_optimization_agent import ScheduleResult, StorageOptimizationAgent
+from src.utils.config import active_config, use_config
+from src.utils.logger import get_logger
+from src.utils.url_guard import normalize_llm_base_url
 
 log = get_logger("chat_agent")
 
 # LangGraph 是可选依赖。规则模式 / LLM 模式都不需要它，
 # 原来这里是硬导入，没装 langgraph 时连对话Agent都用不了。
+# 显式标注 Optional[type]：不标注时 mypy 会把 LangGraphCoordinator 当成"类对象"
+# 本身（type[LangGraphCoordinator]），赋 None 就报 "Cannot assign to a type"。
+LangGraphCoordinator: Optional[type] = None
 try:
-    from src.agents.langgraph_coordinator import LangGraphCoordinator
+    from src.agents.langgraph_coordinator import LangGraphCoordinator as _LangGraphCoordinator
 except ImportError:  # pragma: no cover
-    LangGraphCoordinator = None
+    pass
+else:
+    LangGraphCoordinator = _LangGraphCoordinator
 
 
 # ========== 工具上下文（持有当前调度状态） ==========
@@ -45,7 +52,10 @@ class AgentContext:
     report: Optional[DailyReport] = None
     baseline: Optional[ScheduleResult] = None
     viz_data: Optional[Dict] = None
-    dr_signals: List[DRSignal] = None
+    # 默认 None（未求解时没有信号），故注解必须带 Optional——
+    # 写成 List[DRSignal] 会让 mypy 判 "None 不能赋给 list"，
+    # 而调用方确实会读到 None（get_dr_info 里已按 `or []` 兜底）。
+    dr_signals: Optional[List[DRSignal]] = None
     historical_data: Optional[pd.DataFrame] = None
     selected_date: str = ""
     engine: str = "LangGraph"
@@ -220,13 +230,14 @@ class SchedulingTools:
         max_hour = max_idx // 4
 
         status = "✅ 全天正常" if max_temp < 45 else "⚠️ 触发降额" if max_temp < 55 else "🛑 超温"
+        _b = active_config().battery
         return (
             f"🌡️ 电池热状态（一阶RC模型）：\n"
             f"• 最高温度：{max_temp:.1f}℃（{max_hour}:00左右）\n"
             f"• 平均温度：{avg_temp:.1f}℃\n"
             f"• 超45℃时段：{over_temp_count}个（共96点）\n"
             f"• 状态：{status}\n"
-            f"• 热容C={active_config().battery.thermal_capacity_kj_k}kJ/K，热阻Rth={active_config().battery.thermal_resistance_k_w}K/W"
+            f"• 热容C={_b.thermal_capacity_kj_k}kJ/K，热阻Rth={_b.thermal_resistance_k_w}K/W"
         )
 
     def get_dr_info(self) -> str:
@@ -234,14 +245,27 @@ class SchedulingTools:
         if not self.ctx.viz_data or not self.ctx.viz_data.get("dr_responses"):
             return "当前无需求响应事件。"
         lines = ["📡 需求响应事件："]
+        # dr_signals 声明为 List[DRSignal] = None，未求解时可能真的是 None；
+        # 用 `or []` 兜底，否则 len(None) 会直接抛 TypeError。
+        sigs = self.ctx.dr_signals or []
         for i, dr in enumerate(self.ctx.viz_data["dr_responses"]):
-            sig = self.ctx.dr_signals[i] if i < len(self.ctx.dr_signals) else None
-            sig_str = f"{pd.to_datetime(sig.start_time).strftime('%H:%M')}-{pd.to_datetime(sig.end_time).strftime('%H:%M')}" if sig else "?"
+            sig = sigs[i] if i < len(sigs) else None
+            if sig:
+                _s, _e = pd.to_datetime(sig.start_time), pd.to_datetime(sig.end_time)
+                sig_str = f"{_s.strftime('%H:%M')}-{_e.strftime('%H:%M')}"
+            else:
+                sig_str = "?"
             if dr.accepted:
+                # 这里原先直接用 sig.target_reduction_kw：当 dr_responses 比 dr_signals
+                # 长（例如上游只回传了部分信号）时 sig 为 None，会在渲染对话时抛
+                # AttributeError —— 而上一行的 sig_str 已经判过 None，看起来"已经防住了"。
+                target_str = f"{sig.target_reduction_kw:.0f}" if sig else "?"
                 lines.append(
                     f"  ✅ 事件{i+1}（{sig_str}）：接受响应\n"
-                    f"     目标{sig.target_reduction_kw:.0f}kW → 实际{dr.response_power_kw:.0f}kW\n"
-                    f"     补贴{dr.subsidy_revenue_yuan:.1f}元，衰减成本{dr.degradation_cost_yuan:.1f}元，净收益{dr.net_dr_revenue_yuan:.1f}元"
+                    f"     目标{target_str}kW → 实际{dr.response_power_kw:.0f}kW\n"
+                    f"     补贴{dr.subsidy_revenue_yuan:.1f}元，"
+                    f"衰减成本{dr.degradation_cost_yuan:.1f}元，"
+                    f"净收益{dr.net_dr_revenue_yuan:.1f}元"
                 )
             else:
                 lines.append(f"  ❌ 事件{i+1}（{sig_str}）：拒绝 - {dr.reason}")
@@ -273,7 +297,11 @@ class SchedulingTools:
 
         dr_signals = self.ctx.dr_signals if enable_dr is not False else []
 
-        # 运行
+        # 运行。coordinator 显式标注 Any：两条分支返回的是不同类
+        # （LangGraphCoordinator / CoordinatorAgent），但接口一致（都有
+        # run_daily_scheduling）。不标注时 mypy 取首个分支的类型，
+        # 第二个分支就报"类型不兼容"。
+        coordinator: Any
         with use_config(_cfg):
             if self.ctx.engine == "LangGraph" and LangGraphCoordinator is not None:
                 coordinator = LangGraphCoordinator(_cfg)
@@ -304,11 +332,16 @@ class SchedulingTools:
         self.ctx.viz_data = coordinator.get_visualization_data()
 
         param_changes = []
-        if soc_min is not None: param_changes.append(f"SOC下限={soc_min}%")
-        if soc_max is not None: param_changes.append(f"SOC上限={soc_max}%")
-        if rated_power is not None: param_changes.append(f"额定功率={rated_power}kW")
-        if include_thermal is not None: param_changes.append(f"热约束={'开' if include_thermal else '关'}")
-        if enable_dr is not None: param_changes.append(f"DR={'开' if enable_dr else '关'}")
+        if soc_min is not None:
+            param_changes.append(f"SOC下限={soc_min}%")
+        if soc_max is not None:
+            param_changes.append(f"SOC上限={soc_max}%")
+        if rated_power is not None:
+            param_changes.append(f"额定功率={rated_power}kW")
+        if include_thermal is not None:
+            param_changes.append(f"热约束={'开' if include_thermal else '关'}")
+        if enable_dr is not None:
+            param_changes.append(f"DR={'开' if enable_dr else '关'}")
 
         return (
             f"🔄 已用新参数重新运行：{', '.join(param_changes) if param_changes else '默认参数'}\n"
@@ -497,7 +530,7 @@ def _is_tool_chunk(chunk) -> bool:
             or type(chunk).__name__.startswith("ToolMessage"))
 
 
-def _llm_kwargs(api_key: str, base_url: str, model: str,
+def _llm_kwargs(api_key: str, base_url: Optional[str], model: str,
                 params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """组装对话模型的构造参数。单独成函数是为了能把"设置页的值有没有真的传下去"测出来。
 
@@ -524,12 +557,12 @@ class LLMAgent:
     # 供 API 层透传的模式标识（"rule" | "llm"）
     mode = "llm"
 
-    def __init__(self, tools: SchedulingTools, api_key: str, base_url: str = None,
-                 model: str = "gpt-4o-mini", params: Dict[str, Any] = None):
-        from langchain_core.tools import tool
+    def __init__(self, tools: SchedulingTools, api_key: str, base_url: Optional[str] = None,
+                 model: str = "gpt-4o-mini", params: Optional[Dict[str, Any]] = None):
         # langchain 1.x 移除了 create_tool_calling_agent/AgentExecutor，
         # 迁移到 v1 新 API create_agent（LangGraph 内核）。
         from langchain.agents import create_agent
+        from langchain_core.tools import tool
 
         self.tools_obj = tools
 
@@ -561,11 +594,11 @@ class LLMAgent:
 
         @tool
         def run_with_params(
-            soc_min: int = None,
-            soc_max: int = None,
-            rated_power: int = None,
-            include_thermal: bool = None,
-            enable_dr: bool = None,
+            soc_min: Optional[int] = None,
+            soc_max: Optional[int] = None,
+            rated_power: Optional[int] = None,
+            include_thermal: Optional[bool] = None,
+            enable_dr: Optional[bool] = None,
         ) -> str:
             """用新参数重新运行调度。参数可选，不传则保持原值。
             soc_min/soc_max: 百分比整数(如20,90)

@@ -46,7 +46,8 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from io import TextIOWrapper
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 
@@ -762,7 +763,11 @@ def _utf8_stdout() -> None:
     """
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            # cast 而非 getattr：mypy 认为 sys.stdout 的静态类型 TextIO 上没有
+            # reconfigure（它只在 TextIOWrapper 上），而运行时这里就是 TextIOWrapper。
+            # 用 getattr 能绕过类型检查但会触发 ruff B009（对常量属性名调 getattr
+            # 并不比直接访问更安全），cast 才是把"我知道运行时是什么"说清楚的方式。
+            cast(TextIOWrapper, stream).reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):    # 被重定向到管道等场景可能不支持
             pass
 

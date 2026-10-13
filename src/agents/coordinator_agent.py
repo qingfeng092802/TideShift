@@ -11,19 +11,23 @@
 - 默认使用纯Python工作流编排（轻量、可控、无需额外依赖）
 - 可选使用LangGraph编排（需安装langgraph）
 """
-from src.utils.logger import get_logger
-from src.utils import trace
-log = get_logger(__name__)
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List
-from datetime import datetime
 
-from src.utils.config import CONFIG, active_config
-from src.agents.load_forecast_agent import LoadForecastAgent, ForecastResult
-from src.agents.storage_optimization_agent import StorageOptimizationAgent, ScheduleResult
-from src.agents.demand_response_agent import DemandResponseAgent, DRSignal, DRResponse
+from src.agents.demand_response_agent import DemandResponseAgent, DRResponse, DRSignal
+from src.agents.load_forecast_agent import ForecastResult, LoadForecastAgent
+from src.agents.storage_optimization_agent import ScheduleResult, StorageOptimizationAgent
+from src.utils import trace
+from src.utils.config import active_config
+from src.utils.logger import get_logger
+
+# 原先这行夹在两组 import 之间（`log = get_logger(...)` 在第 16 行、其余 import
+# 在它之后），ruff 的 E402 会为后面每一行报"模块级 import 不在文件顶部"。
+# 语句顺序对运行没有影响，但会让静态检查整片变红而被迫整体忽略规则。
+log = get_logger(__name__)
 
 
 @dataclass
@@ -230,8 +234,14 @@ class CoordinatorAgent:
             if dr_start_mask.any():
                 dr_start_idx = int(np.argmax(dr_start_mask))
                 # 用基准调度中DR开始时刻的温度和SOC
-                dr_initial_temp = base_schedule.battery_temp_c[dr_start_idx] if dr_start_idx < len(base_schedule.battery_temp_c) else self.state.current_battery_temp
-                dr_initial_soc = base_schedule.soc[dr_start_idx] if dr_start_idx < len(base_schedule.soc) else self.state.current_soc
+                if dr_start_idx < len(base_schedule.battery_temp_c):
+                    dr_initial_temp = base_schedule.battery_temp_c[dr_start_idx]
+                else:
+                    dr_initial_temp = self.state.current_battery_temp
+                if dr_start_idx < len(base_schedule.soc):
+                    dr_initial_soc = base_schedule.soc[dr_start_idx]
+                else:
+                    dr_initial_soc = self.state.current_soc
             else:
                 dr_initial_temp = self.state.current_battery_temp
                 dr_initial_soc = self.state.current_soc
@@ -269,16 +279,19 @@ class CoordinatorAgent:
         # SOC后处理：确保DR调整后的功率满足SOC约束（物理可行性裁剪）
         dt = self.cfg.battery.time_step_hours
         soc = self.state.current_soc
+        _cap = self.cfg.battery.rated_capacity_kwh
+        _eta_c = self.cfg.battery.charge_efficiency
+        _eta_d = self.cfg.battery.discharge_efficiency
         for i in range(len(final_power)):
             power = final_power[i]
             if power > 0:  # 放电
-                max_discharge = (soc - self.cfg.battery.soc_min) * self.cfg.battery.rated_capacity_kwh / dt * self.cfg.battery.discharge_efficiency
+                max_discharge = (soc - self.cfg.battery.soc_min) * _cap / dt * _eta_d
                 final_power[i] = min(power, max(0, max_discharge))
-                soc -= final_power[i] * dt / (self.cfg.battery.discharge_efficiency * self.cfg.battery.rated_capacity_kwh)
+                soc -= final_power[i] * dt / (_eta_d * _cap)
             elif power < 0:  # 充电
-                max_charge = (self.cfg.battery.soc_max - soc) * self.cfg.battery.rated_capacity_kwh / dt / self.cfg.battery.charge_efficiency
+                max_charge = (self.cfg.battery.soc_max - soc) * _cap / dt / _eta_c
                 final_power[i] = max(power, -max(0, max_charge))
-                soc += abs(final_power[i]) * dt * self.cfg.battery.charge_efficiency / self.cfg.battery.rated_capacity_kwh
+                soc += abs(final_power[i]) * dt * _eta_c / _cap
             soc = np.clip(soc, self.cfg.battery.soc_min, self.cfg.battery.soc_max)
 
         # 基于最终功率重新计算收益和温度
@@ -342,7 +355,7 @@ class CoordinatorAgent:
         )
 
         log.info(f"\n{'='*60}")
-        log.info(f"[调度协调Agent] 日调度完成")
+        log.info("[调度协调Agent] 日调度完成")
         log.info(f"{'='*60}")
         log.info(f"  峰谷套利收益: {report.arbitrage_revenue_yuan:.2f} 元")
         log.info(f"  需求响应补贴: {report.dr_subsidy_yuan:.2f} 元")
@@ -379,5 +392,7 @@ class CoordinatorAgent:
             "final_schedule": self.state.final_schedule,   # 给解释层用
             "dr_responses": self.state.dr_responses,
             "feature_importance": self.load_agent.get_feature_importance(),
-            "forecast_mape_raw": self.state.forecast_result.mape_without_correction if self.state.forecast_result else 0.0,
+            "forecast_mape_raw": (
+                self.state.forecast_result.mape_without_correction
+                if self.state.forecast_result else 0.0),
         }

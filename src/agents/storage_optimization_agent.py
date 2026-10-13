@@ -19,15 +19,16 @@
   - 基准策略严格能量守恒，不用 np.clip 掩盖越界；
   - 寿命衰减按 SOC 区间加权（非常数），优化器会主动避开深充深放。
 """
+from dataclasses import dataclass
+from typing import Dict, Optional
+
 import numpy as np
-import pandas as pd
 import pulp
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
-from src.utils.config import CONFIG, active_config, heat_pwl_breakpoints, internal_resistance_from_efficiency
-from src.utils.logger import get_logger
-from src.models.battery_thermal_model import estimate_temperature_rise, BatteryThermalModel
+
 from src.models.battery_degradation_model import BatteryDegradationModel
+from src.models.battery_thermal_model import BatteryThermalModel
+from src.utils.config import active_config, heat_pwl_breakpoints
+from src.utils.logger import get_logger
 
 _log = get_logger("storage_optimization")
 
@@ -65,6 +66,34 @@ class ScheduleResult:
     demand_cap_kw: float = 0.0             # 本次求解施加的需量上限 kW（未启用为 0.0）
 
 
+@dataclass
+class _MilpModel:
+    """一次求解的 MILP 模型句柄（内部使用，P2.6 拆分时引入）。
+
+    存在的理由：`optimize()` 拆成"准备 → 建模 → 求解 → 取结果"四段之后，
+    建模阶段产出的十几个量（问题对象、三类变量、热流、衰减表达式、以及
+    n/dt/cap/pmax/ηc/ηd 这些建模期导出的标量）都要传给后面的阶段。
+    若逐个当参数传，`_extract_result()` 的签名会膨胀到二十多个参数，
+    且每加一个变量就要改三处签名。打包成一个句柄后，阶段之间只传一个对象。
+
+    注意 `thr` / `degradation_expr` 只在 `include_degradation_cost=True` 时
+    才有非平凡取值（否则 `degradation_expr` 是整数 0，`thr` 仍是完整列表），
+    与拆分前的局部变量语义完全一致——这里不做任何规整，保持"纯搬移"。
+    """
+    prob: pulp.LpProblem            # 问题对象（求解器从这里取）
+    P_charge: list                  # 充电功率变量（96 个，电网侧 kW）
+    P_discharge: list               # 放电功率变量（96 个，电网侧 kW）
+    SOC: list                       # SOC 变量（97 个，含终值）
+    thr: list                       # 电池侧吞吐表达式（96 个，kWh）
+    degradation_expr: object        # 目标函数里实际计入的衰减成本表达式（可能为 0）
+    n: int                          # 时段数 96
+    dt: float                       # 步长 0.25h
+    cap: float                      # 额定容量 kWh
+    pmax: float                     # 额定功率 kW
+    eta_c: float                    # 充电效率
+    eta_d: float                    # 放电效率
+
+
 class StorageOptimizationAgent:
     """储能优化调度Agent"""
 
@@ -85,7 +114,9 @@ class StorageOptimizationAgent:
         include_thermal_constraint: bool = True,
         include_degradation_cost: bool = True,
         dr_signal: Optional[Dict] = None,
-        terminal_soc: Optional[float] = "cyclic",
+        # 字符串哨兵 "cyclic" 是刻意的（见函数体 `if terminal_soc == "cyclic"`）：
+        # 传 None 表示"不约束终值 SOC"，传 "cyclic" 表示"回到初值"，两者语义不同。
+        terminal_soc: Optional[float] | str = "cyclic",
         soc_weighted_degradation: bool = True,
         time_limit_s: int = 120,
         mip_gap: float = 0.01,
@@ -126,6 +157,63 @@ class StorageOptimizationAgent:
         返回：
             ScheduleResult
         """
+        # 四个阶段各是一个私有方法（拆分理由见它们上方的小节注释）。
+        # 这里只做串联，让"入参校验 → 建模 → 求解 → 取结果"的流程一眼可读。
+        load_arr, terminal_soc, ambient_temp_profile = self._prepare_inputs(
+            ambient_temp_profile, terminal_soc, load_profile_kw, demand_cap_kw, initial_soc)
+
+        model = self._build_milp_model(
+            price_profile=price_profile,
+            ambient_temp_profile=ambient_temp_profile,
+            initial_soc=initial_soc,
+            terminal_soc=terminal_soc,
+            include_thermal_constraint=include_thermal_constraint,
+            include_degradation_cost=include_degradation_cost,
+            dr_signal=dr_signal,
+            soc_weighted_degradation=soc_weighted_degradation,
+            load_arr=load_arr,
+            demand_cap_kw=demand_cap_kw,
+        )
+
+        # ========== 5. 求解 ==========
+        # 优先 HiGHS（比 CBC 快一个量级），不可用时回退 CBC（回退必打 WARNING）
+        # 第一个返回值是 pulp 的数字状态码，判定一律用第二个（字符串），故丢弃。
+        _, solver_status, time_limit_hit = self._solve(
+            model.prob, time_limit_s, mip_gap)
+        solver_status, time_limit_hit = self._check_solver_status(
+            model, solver_status, time_limit_hit, time_limit_s, mip_gap)
+
+        # ========== 6. 提取结果 ==========
+        return self._extract_result(
+            model=model,
+            price_profile=price_profile,
+            ambient_temp_profile=ambient_temp_profile,
+            initial_soc=initial_soc,
+            dr_signal=dr_signal,
+            load_arr=load_arr,
+            demand_cap_kw=demand_cap_kw,
+            solver_status=solver_status,
+            time_limit_hit=time_limit_hit,
+            mip_gap=mip_gap,
+        )
+
+    # ------------------------------------------------------------------ #
+    #  阶段 1：入参准备与校验
+    # ------------------------------------------------------------------ #
+    def _prepare_inputs(
+        self,
+        ambient_temp_profile: Optional[np.ndarray],
+        terminal_soc: Optional[float] | str,
+        load_profile_kw: Optional[np.ndarray],
+        demand_cap_kw: Optional[float],
+        initial_soc: float,
+    ) -> tuple[Optional[np.ndarray], Optional[float], np.ndarray]:
+        """校验成对参数、补默认气温、把终值 SOC 哨兵解成数值。
+
+        返回 `(load_arr, terminal_soc, ambient_temp_profile)`。
+        原先这些散在 optimize() 的前 30 行里，与建模代码交错，看不出"哪些是
+        前置校验、哪些是建模"；拆出来之后 optimize() 只剩流程串联。
+        """
         if (demand_cap_kw is None) != (load_profile_kw is None):
             raise ValueError(
                 "demand_cap_kw 与 load_profile_kw 必须成对给出："
@@ -140,18 +228,58 @@ class StorageOptimizationAgent:
             load_arr = None
 
         n = self.battery_cfg.num_steps  # 96
+        if ambient_temp_profile is None:
+            ambient_temp_profile = np.ones(n) * self.cfg.ambient_temp_c
+
+        # 终值SOC：默认与初值一致，保证日循环可持续。
+        # 这里写成三分支而不是原来的 `if terminal_soc == "cyclic": terminal_soc = initial_soc`：
+        # mypy 无法从 `!= "cyclic"` 推出"剩下的不是 str"，会把 str 一路带进
+        # _build_milp_model（arg-type 报错）；顺便把非法字符串挡在建模之前，
+        # 报错信息比 pulp 内部的类型错误直白得多。
+        resolved_terminal_soc: Optional[float]
+        if terminal_soc == "cyclic":
+            resolved_terminal_soc = initial_soc
+        elif terminal_soc is None:
+            resolved_terminal_soc = None
+        else:
+            try:
+                resolved_terminal_soc = float(terminal_soc)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "terminal_soc 只能是 None（不约束终值）、'cyclic'（回到初值）"
+                    f"或一个数值，收到 {terminal_soc!r}") from exc
+
+        return load_arr, resolved_terminal_soc, ambient_temp_profile
+
+    # ------------------------------------------------------------------ #
+    #  阶段 2：建模（变量 / 目标函数 / 约束）
+    # ------------------------------------------------------------------ #
+    def _build_milp_model(
+        self,
+        *,
+        price_profile: np.ndarray,
+        ambient_temp_profile: np.ndarray,
+        initial_soc: float,
+        terminal_soc: Optional[float],
+        include_thermal_constraint: bool,
+        include_degradation_cost: bool,
+        dr_signal: Optional[Dict],
+        soc_weighted_degradation: bool,
+        load_arr: Optional[np.ndarray],
+        demand_cap_kw: Optional[float],
+    ) -> "_MilpModel":
+        """建出完整的 MILP 并返回模型句柄。
+
+        原先这一段（变量、目标函数、六组约束）与求解、取结果同在一个 273 行的
+        `optimize()` 里，改一条约束要在两百多行里定位。拆成方法后，
+        `optimize()` 读起来就是"准备 → 建模 → 求解 → 取结果"四步。
+        """
+        n = self.battery_cfg.num_steps  # 96
         dt = self.battery_cfg.time_step_hours  # 0.25h
         cap = self.battery_cfg.rated_capacity_kwh
         pmax = self.battery_cfg.rated_power_kw
         eta_c = self.battery_cfg.charge_efficiency
         eta_d = self.battery_cfg.discharge_efficiency
-
-        if ambient_temp_profile is None:
-            ambient_temp_profile = np.ones(n) * self.cfg.ambient_temp_c
-
-        # 终值SOC：默认与初值一致，保证日循环可持续
-        if terminal_soc == "cyclic":
-            terminal_soc = initial_soc
 
         # ========== 1. 创建问题 ==========
         prob = pulp.LpProblem("EnergyStorageScheduling", pulp.LpMaximize)
@@ -246,19 +374,38 @@ class StorageOptimizationAgent:
         # 为什么必须有这一条：只看电价的目标函数对"月最大需量"完全无感，实测它会在
         # 谷段尾部满功率充电、与早爬坡负荷叠加，把内置 7 月的月峰从 2399 kW 顶到 2782 kW，
         # 在 1583 号合同需量制下每月多交 1.9 万元基本电费——详见 src/utils/demand_charge.py。
-        if demand_cap_kw is not None:
+        # 显式判 load_arr is not None（上面已保证两者成对出现，语义不变）：
+        # mypy 无法从 `demand_cap_kw is not None` 推出 load_arr 也非空，
+        # 不写这一句它会把 load_arr[t] 判成"对 Optional 取下标"。
+        if demand_cap_kw is not None and load_arr is not None:
             for t in range(n):
                 prob += (load_arr[t] + P_charge[t] - P_discharge[t] <= demand_cap_kw,
                          f"demand_cap_{t}")
 
-        # ========== 5. 求解 ==========
-        # 优先 HiGHS（比 CBC 快一个量级），不可用时回退 CBC（回退必打 WARNING）
-        status, solver_status, time_limit_hit = self._solve(prob, time_limit_s, mip_gap)
+        return _MilpModel(
+            prob=prob, P_charge=P_charge, P_discharge=P_discharge, SOC=SOC,
+            thr=thr, degradation_expr=degradation_expr, n=n, dt=dt, cap=cap, pmax=pmax,
+            eta_c=eta_c, eta_d=eta_d,
+        )
 
-        # 求解状态必须校验，杜绝"静默产出垃圾解"。
-        # Infeasible 时解不存在——此前 pulp.value() 返回 None 直接构造 object 数组，
-        # np.clip 抛错或静默失真。现在显式抛错并携带可读信息。
+    # ------------------------------------------------------------------ #
+    #  阶段 3：求解状态校验
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _check_solver_status(
+        model: "_MilpModel", solver_status: str, time_limit_hit: bool,
+        time_limit_s: int, mip_gap: float,
+    ):
+        """把求解器状态分成"可用 / 次优但可用 / 必须报错"三类。
+
+        返回可能被修正过的 `(solver_status, time_limit_hit)`。
+        这一段原先紧跟在 `_solve()` 之后、占 25 行，且引用了建模期的 `P_charge`
+        与 `n` —— 拆出来后它的输入只有模型句柄与状态串，判定逻辑可以单独读。
+        """
+        n = model.n
         if solver_status == "Infeasible":
+            # Infeasible 时解不存在——此前 pulp.value() 返回 None 直接构造 object 数组，
+            # np.clip 抛错或静默失真。现在显式抛错并携带可读信息。
             raise ValueError(
                 "MILP 求解结果不可行（Infeasible）：请检查 DR 目标功率是否超过额定功率、"
                 "SOC 区间/终值约束是否自洽、热约束是否过严、"
@@ -266,23 +413,42 @@ class StorageOptimizationAgent:
         if solver_status in ("Undefined", "Not Solved"):
             # 有可行 incumbent（CBC/HiGHS 超时但已找到可行解）→ 降级为次优解继续；
             # 完全无解 → 显式报错，绝不静默用垃圾解
-            _has_incumbent = any(pulp.value(P_charge[t]) is not None for t in range(n))
+            _has_incumbent = any(pulp.value(model.P_charge[t]) is not None for t in range(n))
             if _has_incumbent:
                 _log.warning("MILP 未证明最优（status=%s, 时限=%ss），使用可行次优解并显著标注",
                              solver_status, time_limit_s)
-                solver_status = "Stopped (time limit, feasible incumbent)"
-                time_limit_hit = True
-            else:
-                raise ValueError(
-                    f"MILP 未能求出任何可行解（状态: {solver_status}）：时限 {time_limit_s}s 内"
-                    "模型未找到可行解，请放宽求解时限（time_limit_s）或减小约束强度")
-        elif solver_status != "Optimal":
+                return "Stopped (time limit, feasible incumbent)", True
+            raise ValueError(
+                f"MILP 未能求出任何可行解（状态: {solver_status}）：时限 {time_limit_s}s 内"
+                "模型未找到可行解，请放宽求解时限（time_limit_s）或减小约束强度")
+        if solver_status != "Optimal":
             # Stopped 等状态（时限/ gap 提前停止但拿到可行解）：可用但必须显著标注为次优
             _log.warning("MILP 非最优解：status=%s（时限=%ss, gap=%s%%），结果为次优解",
                          solver_status, time_limit_s, mip_gap * 100)
-            time_limit_hit = True
+            return solver_status, True
+        return solver_status, time_limit_hit
 
-        # ========== 6. 提取结果 ==========
+    # ------------------------------------------------------------------ #
+    #  阶段 4：结果提取与后验核算
+    # ------------------------------------------------------------------ #
+    def _extract_result(
+        self,
+        *,
+        model: "_MilpModel",
+        price_profile: np.ndarray,
+        ambient_temp_profile: np.ndarray,
+        initial_soc: float,
+        dr_signal: Optional[Dict],
+        load_arr: Optional[np.ndarray],
+        demand_cap_kw: Optional[float],
+        solver_status: str,
+        time_limit_hit: bool,
+        mip_gap: float,
+    ) -> ScheduleResult:
+        """从求解结果取出功率/SOC，做后验热仿真与衰减核算，组装 ScheduleResult。"""
+        n, dt, cap = model.n, model.dt, model.cap
+        P_charge, P_discharge, SOC = model.P_charge, model.P_discharge, model.SOC
+
         charge_power = np.array([pulp.value(P_charge[t]) or 0.0 for t in range(n)])
         discharge_power = np.array([pulp.value(P_discharge[t]) or 0.0 for t in range(n)])
         # 此行原本是全函数唯一没写 `or 0.0` 的提取——求解异常时 value() 返回
@@ -343,7 +509,7 @@ class StorageOptimizationAgent:
             energy_balance_error_kwh=round(balance_err, 4),
             dr_revenue_yuan=round(dr_rev, 2),
             soc_violation_steps=int(violations),
-            degradation_in_objective_yuan=round(float(pulp.value(degradation_expr) or 0.0), 2),
+            degradation_in_objective_yuan=round(float(pulp.value(model.degradation_expr) or 0.0), 2),
             time_limit_hit=bool(time_limit_hit),
             mip_gap_pct=round(mip_gap * 100, 3),
             grid_peak_kw=(0.0 if load_arr is None else
@@ -525,7 +691,8 @@ class StorageOptimizationAgent:
         price_profile: np.ndarray,
         ambient_temp_profile: Optional[np.ndarray] = None,
         initial_soc: float = 0.5,
-        terminal_soc: Optional[float] = "cyclic",
+        # 同 optimize()：None = 不约束，数字 = 指定终值，"cyclic" = 回到初值
+        terminal_soc: Optional[float] | str = "cyclic",
     ) -> ScheduleResult:
         """
         基准策略：谷段充满、尖峰放完（运维现场最常见的手动策略）

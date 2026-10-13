@@ -29,7 +29,7 @@ import argparse
 import math
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -99,9 +99,14 @@ def with_contract_kw(cfg: DemandTariffConfig, contract_kw: float) -> DemandTarif
     return DemandTariffConfig(**{**cfg.__dict__, "contract_demand_kw": float(contract_kw)})
 
 
-def grid_import_kw(load_kw: Sequence[float], charge_kw: Sequence[float],
-                   discharge_kw: Sequence[float]) -> np.ndarray:
-    """电网侧取电功率 = 负荷 + 充电（从电网买） − 放电（顶上去）。"""
+def grid_import_kw(load_kw: Sequence[float] | np.ndarray, charge_kw: Sequence[float] | np.ndarray,
+                   discharge_kw: Sequence[float] | np.ndarray) -> np.ndarray:
+    """电网侧取电功率 = 负荷 + 充电（从电网买） − 放电（顶上去）。
+
+    显式写上 `| np.ndarray`：调用方（`compare_modes`）传进来的是调度结果里的
+    ndarray，而 mypy 不认为 ndarray 满足 `Sequence` 协议（缺 __getitem__ 重载），
+    只写 Sequence 会把正确调用判成类型错误。
+    """
     return (np.asarray(load_kw, dtype=float) + np.asarray(charge_kw, dtype=float)
             - np.asarray(discharge_kw, dtype=float))
 
@@ -147,16 +152,19 @@ def aggregate(rows: Sequence[Dict]) -> Dict:
     if not rows:
         raise ValueError("没有逐日记录可汇总")
 
-    def _stat(key):
+    def _stat(key: str) -> Optional[Dict[str, float]]:
         vals = [float(r[key]) for r in rows if key in r]
         if not vals:
             return None
         return {"peak": max(vals), "mean_daily_peak": float(np.mean(vals)), "days": len(vals)}
 
-    stats = {"no_storage": _stat("load_peak_kw"), "baseline": _stat("base_peak_kw"),
-             "optimized": _stat("opt_peak_kw")}
-    out = {"days_in_month": len(rows), "per_day": list(rows), "peaks": {},
-           "daily_peak_mean": {}}
+    stats: Dict[str, Optional[Dict[str, float]]] = {
+        "no_storage": _stat("load_peak_kw"), "baseline": _stat("base_peak_kw"),
+        "optimized": _stat("opt_peak_kw")}
+    # 显式标注 Dict[str, Any]：不标注时 mypy 会把 "peaks"/"daily_peak_mean" 推断成
+    # 空 dict 的字面量类型（dict[str, object]），后面按 key 赋值就报"object 不可索引"。
+    out: Dict[str, Any] = {"days_in_month": len(rows), "per_day": list(rows), "peaks": {},
+                           "daily_peak_mean": {}}
     for key, s in stats.items():
         if s:
             out["peaks"][key] = s["peak"]

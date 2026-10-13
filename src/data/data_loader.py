@@ -4,8 +4,9 @@
 服务起不来）。改为以本文件位置为基准：src/data/data_loader.py → 项目根 = parents[2]。
 显式传入 data_dir 参数时行为不变（便于测试注入临时数据目录）。
 """
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 # 项目根目录（src/data/data_loader.py → parents[2] = 项目根）
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +34,9 @@ def load_battery_params(data_dir=None) -> dict:
     base = Path(data_dir) if data_dir else DEFAULT_DATA_DIR
     path = base / "battery" / "battery_params.csv"
     df = pd.read_csv(path)
-    return dict(zip(df["parameter"], df["value"]))
+    # strict=True：同一张表的"parameter"/"value"两列长度必然相等，
+    # 长度不等说明 CSV 本身畸形，静默截断成短字典比直接报错更难查。
+    return dict(zip(df["parameter"], df["value"], strict=True))
 
 
 def get_day_data(df: pd.DataFrame, date: str) -> pd.DataFrame:

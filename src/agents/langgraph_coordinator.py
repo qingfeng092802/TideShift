@@ -8,20 +8,24 @@ LangGraph 版本调度协调器
 
 与原 CoordinatorAgent 接口完全兼容，可直接替换使用。
 """
-from src.utils.logger import get_logger
-from src.utils import trace
-log = get_logger(__name__)
 import operator
+from typing import Annotated, Callable, Dict, List, Optional, TypedDict
+
 import numpy as np
 import pandas as pd
-from typing import TypedDict, Annotated, Optional, List, Dict
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from src.utils.config import CONFIG, active_config
-from src.agents.load_forecast_agent import LoadForecastAgent, ForecastResult
-from src.agents.storage_optimization_agent import StorageOptimizationAgent, ScheduleResult
-from src.agents.demand_response_agent import DemandResponseAgent, DRSignal, DRResponse
 from src.agents.coordinator_agent import DailyReport
+from src.agents.demand_response_agent import DemandResponseAgent, DRResponse, DRSignal
+from src.agents.load_forecast_agent import ForecastResult, LoadForecastAgent
+from src.agents.storage_optimization_agent import ScheduleResult, StorageOptimizationAgent
+from src.utils import trace
+from src.utils.config import active_config
+from src.utils.logger import get_logger
+
+# 原先这行夹在两组 import 之间（`log = get_logger(...)` 在第 13 行、其余 import
+# 在它之后），ruff 的 E402 会为后面每一行报"模块级 import 不在文件顶部"。
+log = get_logger(__name__)
 
 
 # ========== 图状态定义 ==========
@@ -73,6 +77,12 @@ class SchedulingState(TypedDict, total=False):
     explanation_source: str
     baseline_result: object  # 可选的基准 ScheduleResult，用于解释层做对照
 
+    # 下面两个键由 run_daily_scheduling 写进 initial_state、由 forecast_node /
+    # explain_node 读取。原先漏声明，mypy 报 "Extra keys ... for TypedDict"——
+    # 运行时一直在用，只是类型定义没跟上。
+    xgb_params: Optional[Dict]
+    enable_explanation: bool
+
 
 # ========== 节点函数 ==========
 
@@ -80,7 +90,6 @@ def init_node(state: SchedulingState) -> Dict:
     """节点1：初始化状态，加载当日电价/温度/时间数据"""
     date = state["date"]
     historical_data = state["historical_data"]
-    cfg = CONFIG
 
     log.info("\n[LangGraph] ▶ init_node：加载当日数据")
 
@@ -379,7 +388,7 @@ def finalize_node(state: SchedulingState) -> Dict:
     )
 
     log.info(f"\n{'='*60}")
-    log.info(f"[LangGraph] 日调度完成")
+    log.info("[LangGraph] 日调度完成")
     log.info(f"{'='*60}")
     log.info(f"  峰谷套利收益: {report.arbitrage_revenue_yuan:.2f} 元")
     log.info(f"  需求响应补贴: {report.dr_subsidy_yuan:.2f} 元")
@@ -413,7 +422,8 @@ def explanation_node(state: SchedulingState) -> Dict:
 
     try:
         from src.agents.llm_explainer import (
-            LLMExplainer, build_digest, template_explain,
+            LLMExplainer,
+            build_digest,
         )
 
         report = state["report"]
@@ -538,7 +548,7 @@ class LangGraphCoordinator:
         xgb_params: Optional[Dict] = None,
         baseline: Optional[object] = None,
         enable_explanation: bool = True,
-        progress_cb: Optional[callable] = None,
+        progress_cb: Optional[Callable[..., None]] = None,
     ) -> DailyReport:
         """
         执行日调度全流程（LangGraph驱动）
@@ -608,7 +618,9 @@ class LangGraphCoordinator:
             "final_schedule": state["final_schedule"],   # 给解释层用（含终值SOC/守恒残差）
             "dr_responses": state.get("dr_responses", []),
             "feature_importance": state.get("feature_importance", {}),
-            "forecast_mape_raw": state["forecast_result"].mape_without_correction if state.get("forecast_result") else 0.0,
+            "forecast_mape_raw": (
+                state["forecast_result"].mape_without_correction
+                if state.get("forecast_result") else 0.0),
             "explanation": state.get("explanation", ""),
             "explanation_source": state.get("explanation_source", "none"),
         }

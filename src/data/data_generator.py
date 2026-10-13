@@ -4,10 +4,13 @@
 负荷/气温特征参考：NREL商业建筑负荷数据集（合成，非实测）；
 电价口径参考：粤发改价格〔2021〕331 号（时段划分见 PRICE_PERIODS，出处见 data/README.md）
 """
+from pathlib import Path
+from typing import List, Optional, Tuple, TypedDict
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from src.utils.config import CONFIG, active_config
+
+from src.utils.config import active_config
 
 
 def generate_time_index(days: int = 30, start_date: str = "2024-07-01") -> pd.DatetimeIndex:
@@ -121,15 +124,32 @@ def generate_price_profile(time_idx: pd.DatetimeIndex) -> np.ndarray:
     """
     hours = _hour_float(time_idx)
     p = active_config().price
+    # strict=True：hours 由同一个 time_idx 派生，两者长度必然相等；
+    # 不等说明上游传进来的索引本身有问题，此时静默截短会生成一条长度对不上的电价曲线。
     return np.array([price_by_hour(h, month=int(m), price_cfg=p)
-                     for h, m in zip(hours, time_idx.month)])
+                     for h, m in zip(hours, time_idx.month, strict=True)])
 
 
 # 单一事实来源：时段划分同时供 generate_price_profile、/api/bootstrap 前端下发与一致性测试使用。
 # months=None 表示全年生效；有值表示仅这些月份生效（尖峰）。
 # 匹配规则是"窗口最窄者胜"，**不依赖列表顺序**——尖峰窗口是高峰窗口的子集，
 # 靠顺序取胜的写法一旦有人调整顺序就会静默改变电价。
-PRICE_PERIODS = [
+class PricePeriod(TypedDict):
+    """一个电价档位的结构（PRICE_PERIODS 的元素类型）。
+
+    显式声明而不是靠字面量推断：4 条记录的值类型各不相同（str / list / tuple /
+    None），mypy 会把整个列表推断成 `list[dict[str, object]]`，于是
+    `period.get(...)` 与 `period["range"]` 都被判为对 object 操作而报错。
+    """
+    name: str            # 档位中文名（前端标签用）
+    cls: str             # 前端 CSS 类名
+    hours: str           # 人类可读时段（仅展示）
+    range: List[Tuple[int, int]]   # 生效区间（小时，左闭右开），唯一参与匹配的字段
+    price_field: str     # 取价字段名，对应 PriceConfig 的属性
+    months: Optional[Tuple[int, ...]]  # 生效月份；None = 全年
+
+
+PRICE_PERIODS: List[PricePeriod] = [
     {"name": "低谷", "cls": "st-ok", "hours": "00:00-08:00",
      "range": [(0, 8)], "price_field": "valley_price", "months": None},
     {"name": "平段", "cls": "st-neutral", "hours": "08:00-10:00, 12:00-14:00, 19:00-24:00",
@@ -141,7 +161,7 @@ PRICE_PERIODS = [
 ]
 
 
-def price_by_hour(h: float, *, month: int = None, price_cfg=None) -> float:
+def price_by_hour(h: float, *, month: Optional[int] = None, price_cfg=None) -> float:
     """按单一事实来源 PRICE_PERIODS 返回 h 小时的电价（元/kWh）。
 
     `month` 决定尖峰是否生效；传 None 表示调用方没有月份上下文，此时**尖峰档不参与
@@ -171,7 +191,7 @@ def price_by_hour(h: float, *, month: int = None, price_cfg=None) -> float:
 
 
 def generate_dr_signals(time_idx: pd.DatetimeIndex, num_events: int = 2,
-                         schedule_date: str = None) -> pd.DataFrame:
+                         schedule_date: Optional[str] = None) -> pd.DataFrame:
     """
     生成需求响应事件信号
     模拟电网在高峰时段下发削峰指令
@@ -189,13 +209,16 @@ def generate_dr_signals(time_idx: pd.DatetimeIndex, num_events: int = 2,
     peak_hours = [10, 11, 14, 15, 16, 17, 18]
     days = time_idx.normalize().unique()
 
+    # 显式标注 list：if 分支给的是 Python list，else 分支 np.random.choice 返回
+    # ndarray，不标注时 mypy 按首个分支推断成 list，else 分支就报类型不符。
+    selected_days: List[pd.Timestamp]
     if schedule_date is not None:
         target_day = pd.Timestamp(schedule_date).normalize()
         if target_day not in days:
             raise ValueError(f"schedule_date {schedule_date} 不在数据日期范围内")
         selected_days = [target_day] * num_events
     else:
-        selected_days = np.random.choice(days, size=min(num_events, len(days)), replace=False)
+        selected_days = list(np.random.choice(days, size=min(num_events, len(days)), replace=False))
     for day in selected_days:
         start_hour = np.random.choice(peak_hours)
         duration_hours = np.random.choice([1, 2])
@@ -213,7 +236,7 @@ def generate_dr_signals(time_idx: pd.DatetimeIndex, num_events: int = 2,
 
 
 def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
-                      schedule_date: str = None):
+                      schedule_date: Optional[str] = None):
     """生成全部数据并保存为CSV
 
     Args:
@@ -278,7 +301,7 @@ def generate_all_data(days: int = 30, save_dir: str = "data", seed: int = 42,
     battery_params.to_csv(save_path / "battery" / "battery_params.csv", index=False,
                         encoding="utf-8-sig", lineterminator="\n")
 
-    print(f"数据生成完成：")
+    print("数据生成完成：")
     print(f"  - 负荷数据：{len(df)} 条 ({days}天 × 96点)")
     print(f"  - 电价数据：{len(typical_day)} 点（典型日）")
     print(f"  - DR事件：{len(dr_signals)} 条")

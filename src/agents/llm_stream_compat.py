@@ -90,7 +90,10 @@ def attach_reasoning_to_payload(messages: list, payload: dict) -> dict:
     out = payload.get("messages")
     if not isinstance(out, list) or len(out) != len(messages):
         return payload
-    for src, dst in zip(messages, out):
+    # strict=True 与上一行的长度校验同义，写成参数是为了让"1:1 配对"这件事
+    # 在调用点就可见 —— 万一将来上面的长度校验被改动，这里仍会直接抛错，
+    # 而不是把思维链错位安到相邻消息上（该错误静默且难查）。
+    for src, dst in zip(messages, out, strict=True):
         if not isinstance(dst, dict) or dst.get("role") != "assistant":
             continue
         text = _pick_reasoning(getattr(src, "additional_kwargs", None))

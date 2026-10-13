@@ -5,8 +5,9 @@
 逐条对应与限制见 data/README.md）
 """
 import threading
-from dataclasses import dataclass, field, replace
-from typing import Dict, Tuple
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Dict
 
 import numpy as np
 
@@ -166,9 +167,6 @@ def active_config() -> "SystemConfig":
     return cfg if cfg is not None else CONFIG
 
 
-from contextlib import contextmanager
-
-
 @contextmanager
 def use_config(cfg: "SystemConfig"):
     """在当前线程内临时生效一份配置快照（不可变），退出自动还原。"""
@@ -205,9 +203,9 @@ def heat_pwl_breakpoints(cfg: BatteryConfig, num_segments: int = 6):
     温度约束形如 T <= T_max，T 关于产热单调增，用高估的产热得到的温度也偏高，
     因此约束是**保守安全**的：满足 chord 约束 => 一定满足真实物理约束。
     """
-    k = cfg.internal_resistance_ohm * (1 + cfg.reaction_heat_coeff) / cfg.nominal_voltage_v ** 2
-    # k 的量纲：产热(W) = k · P(W)²，这里 P 用 kW 传入，故换算
-    # Q(W) = I²R = (P_kw*1000/U)² · R  =>  k_kw = R·1e6/U²
+    # 量纲换算：产热 Q(W) = I²R = (P_kW·1000/U)² · R  =>  k_kw = R·(1+reaction_heat)·1e6/U²
+    # （原先这里还有一行不带 1e6 的中间量 k，从未被读过——它算的是"P 以 W 为单位"的
+    #  系数，而本函数的入参 p_points 是 kW，用错就会把产热少算 100 万倍。删掉以免误用。）
     k_kw = cfg.internal_resistance_ohm * (1 + cfg.reaction_heat_coeff) * 1e6 / cfg.nominal_voltage_v ** 2
     p_points = np.linspace(0.0, cfg.rated_power_kw, num_segments + 1)
     q_points = k_kw * p_points ** 2

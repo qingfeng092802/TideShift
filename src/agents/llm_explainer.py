@@ -25,13 +25,13 @@ import os
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from src.utils import trace
 from src.utils.url_guard import normalize_llm_base_url
-
-import numpy as np
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
@@ -133,8 +133,8 @@ def _hhmm(step_idx: int) -> str:
 
 
 def summarize_windows(
-    net_power: Sequence[float],
-    price: Optional[Sequence[float]] = None,
+    net_power: Sequence[float] | np.ndarray,
+    price: Optional[Sequence[float] | np.ndarray] = None,
     dt_hours: float = 0.25,
     min_power_kw: float = 50.0,
     top_k: int = 5,
@@ -145,11 +145,15 @@ def summarize_windows(
     返回 (充电窗口列表, 放电窗口列表)，每个元素是一行人类可读描述。
     这样 LLM 拿到的是"02:00-06:00 充电 1000kW"而不是 96 个裸数字，
     既省 token 又降低它乱读数的概率。
+
+    显式写上 `| np.ndarray`：调用方（build_digest）传的是调度结果里的 ndarray，
+    而 mypy 不认为 ndarray 满足 Sequence 协议，只写 Sequence 会把正确调用判成类型错误。
     """
     p = np.asarray(net_power, dtype=float)
-    if price is None:
-        price = np.zeros_like(p)
-    pr = np.asarray(price, dtype=float)
+    # 不把 np.zeros_like 写回 price：入参注解是 Optional[Sequence[float]]，
+    # 回写 ndarray 会让类型与注解不符（mypy 报 assignment）。另起一个局部量更清楚。
+    _price_arr: np.ndarray = np.zeros_like(p) if price is None else np.asarray(price, dtype=float)
+    pr = np.asarray(_price_arr, dtype=float)
 
     windows: List[Dict] = []
     cur_sign = 0
@@ -270,7 +274,8 @@ class DecisionDigest:
     def ground_truth_numbers(self) -> List[float]:
         """摘要里出现的全部数值，供防幻觉校验回查"""
         vals: List[float] = []
-        for k, v in asdict(self).items():
+        # 只需要值，不需要键：改为遍历 values()，避免一个用不到的循环变量
+        for v in asdict(self).values():
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 vals.append(float(v))
             elif isinstance(v, list):
@@ -284,10 +289,10 @@ class DecisionDigest:
 def build_digest(
     report,
     schedule,
-    price_profile: Optional[Sequence[float]] = None,
+    price_profile: Optional[Sequence[float] | np.ndarray] = None,
     baseline=None,
     dr_responses: Optional[Sequence] = None,
-    ambient_temp: Optional[Sequence[float]] = None,
+    ambient_temp: Optional[Sequence[float] | np.ndarray] = None,
     temp_safe_max: float = 55.0,
 ) -> DecisionDigest:
     """
@@ -296,6 +301,9 @@ def build_digest(
     report:    DailyReport
     schedule:  ScheduleResult
     baseline:  可选 ScheduleResult（用于算提升幅度）
+
+    price_profile / ambient_temp 显式允许 ndarray：LangGraph 协调器直接传
+    state 里的 numpy 数组，而 mypy 不认为 ndarray 满足 Sequence 协议。
     """
     net_power = np.asarray(schedule.net_power_kw, dtype=float)
     temps = np.asarray(schedule.battery_temp_c, dtype=float)
@@ -437,13 +445,15 @@ def template_explain(digest: DecisionDigest) -> str:
         lines.append(f"2. 放电集中在高价时段：{digest.discharge_windows[0]}")
     if len(digest.discharge_windows) > 1:
         lines.append(f"3. 次优放电窗口：{digest.discharge_windows[1]}")
+    # 衰减成本占套利收益的比例：套利收益为 0 时无意义（会除零），此时显示 0.0
+    _deg_pct = (digest.degradation_cost_yuan / digest.arbitrage_revenue_yuan * 100
+                if digest.arbitrage_revenue_yuan else 0)
     lines += [
         "",
         "约束与风险：",
         f"- 最高温度 {digest.max_temp_c:.1f}℃，距 55.0℃ 安全上限余量 {digest.temp_headroom_c:.1f}℃；"
         + ("已触发降额，需关注散热。" if digest.max_temp_c > 45 else "全天处于安全工作区。"),
-        f"- 衰减成本 {digest.degradation_cost_yuan:.2f} 元，占套利收益 "
-        f"{(digest.degradation_cost_yuan / digest.arbitrage_revenue_yuan * 100 if digest.arbitrage_revenue_yuan else 0):.1f}%；"
+        f"- 衰减成本 {digest.degradation_cost_yuan:.2f} 元，占套利收益 {_deg_pct:.1f}%；"
         f"等效循环 {digest.equivalent_cycles:.4f} 次。",
         f"- 终值SOC {digest.terminal_soc * 100:.1f}%，能量守恒残差 {digest.energy_balance_error_kwh:.4f} kWh，"
         f"SOC越界 {digest.soc_violation_steps} 步。",
