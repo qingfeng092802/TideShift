@@ -5,10 +5,10 @@
 登录限流、SSRF 黑名单、会话隔离、SSE 端点的追溯口径。
 不触发 MILP 求解——全部是秒级安全语义测试。
 """
-import os
 import asyncio
-import time
+import os
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 import server  # noqa: E402  backend/server.py
+
 from src.utils import trace  # noqa: E402
 from src.utils.url_guard import SSRFBlockedError, assert_safe_llm_url  # noqa: E402
 
@@ -395,3 +396,68 @@ def test_env_mode_without_password_refuses_to_start(tmp_path, monkeypatch):
     msg = str(ei.value)
     assert "ADMIN_INITIAL_PASSWORD" in msg and "拒绝启动" in msg
     assert not (tmp_path / "auth.json").exists(), "拒绝启动不得留下任何口令文件"
+
+
+# ------------------------------------------------------------------ #
+#  /api/solve 的 date 入参校验（P1.5 / 审查报告 H-5）
+# ------------------------------------------------------------------ #
+# 为什么这一层必须单独钉：`SolveReq.date` 会被拼进页面级缓存的文件名
+# （`pe_<fp8>_<date>_<soc_min>_<soc_max>_<power>_<ml>`），而 `pd.to_datetime`
+# 对 `'2024-07-15/../../..'` **解析成功**——日期看着正常，落盘位置却跳出了
+# `.solve_cache`。实测（审查报告 probe_app11.py）：两个普通鉴权请求即可在
+# 仓库树里写出一个带真实 HMAC 签名的文件；换成指向另一天缓存条目的穿越路径
+# 则形成跨条目投毒，读侧命中后把毒条目当那天结果返回。
+#
+# 缓存层已在 cache_security._is_safe_cache_name 拒非法文件名（见
+# tests/test_cache_security.py），这里是**第二道**：让非法日期根本进不了会话，
+# 而不是等它拼成文件名后才被拒——那样 `_sess().selected_date` 已经被污染，
+# 后续切片（`_do_solve` 里的 `pd.to_datetime(_date)`）仍会用到它。
+_TRAVERSAL_DATES = [
+    "2024-07-15/../../..",       # 审查报告里唯一"既解析成功又能逃逸"的载荷
+    "2024-07-15/../..",
+    "2024-07-15/..",
+    "2024-07-15/",
+    "../2024-07-15",
+    "2024/07/15",
+    "2024-07-15;..",
+    "2024-07-15..",
+    "15/07/2024",
+    "2024-7-15",                 # 形状合法但非零填充：与缓存键口径不一致
+    "2024-13-45",                # 形状合法但日期不存在
+    "2024-02-30",
+    "x/../../.solve_cache/pe_victim",
+    "2024-07-15\x00",
+]
+
+
+@pytest.mark.parametrize("bad", _TRAVERSAL_DATES)
+def test_solve_rejects_non_iso_date(client, bad):
+    """非 `YYYY-MM-DD` 的 date 必须 422（pydantic 校验失败），且不得改动会话状态。
+
+    断言"会话未被污染"是关键：只断言 422 的话，一个"先赋值再校验"的实现也能过——
+    而那种实现下恶意日期已经进了 `_sess().selected_date`，下一句求解就中招。
+    """
+    hdr = _auth_headers(client)
+    before = server._sess().selected_date
+    r = client.post("/api/solve", headers=hdr, json={"date": bad})
+    assert r.status_code == 422, f"{bad!r} 被接受: {r.status_code} {r.text[:200]}"
+    assert server._sess().selected_date == before, (
+        f"被拒的日期 {bad!r} 仍然改动了会话状态："
+        f"{before!r} -> {server._sess().selected_date!r}")
+
+
+def test_solve_accepts_a_real_iso_date(client, monkeypatch):
+    """反向护栏：合法 ISO 日期必须放行，且确实写进会话。
+
+    防止"校验写得太紧，把正常路径也拦了"——那种缺陷在只测拒绝的用例里是隐形的。
+    """
+    monkeypatch.setattr(server, "start_solve",
+                        lambda **kw: {"action": "started", "forced": False})
+    hdr = _auth_headers(client)
+    try:
+        r = client.post("/api/solve", headers=hdr, json={"date": "2024-07-15"})
+        assert r.status_code == 200, r.text
+        assert server._sess().selected_date == "2024-07-15", (
+            f"合法日期没写进会话：{server._sess().selected_date!r}")
+    finally:
+        server._sess().selected_date = server._sess().default_date()

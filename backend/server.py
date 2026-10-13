@@ -11,58 +11,54 @@ FastAPI 后端 - 储能调度系统 Web 版
 # —— Python 只把【脚本所在目录】(backend/) 加进 sys.path，不会加 CWD，
 # 所以项目根下的 src 包不可见。此前没暴露，是因为开发时走 pytest（conftest 补了
 # sys.path）或 IDE 运行配置；`start_web.bat` 这条"一键启动"路径从未被真正验证过。
-import sys
-import os
 import gc
+import os
+import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))                  # backend/（供 import auth）
 
 from src.utils.logger import get_logger
+
 log = get_logger(__name__)
+import asyncio
+import contextvars
+import copy
+import hashlib
 import io
 import json
-import pickle
+import re
 import threading
-import contextvars
-import hashlib
-import uuid
 import time
-import asyncio
 import urllib.request as _ureq
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from datetime import datetime
 from typing import Optional
 
-
+import auth as auth_mod  # JWT / Fernet / PBKDF2 见 backend/auth.py
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator, model_validator
-from fastapi import Request
-import copy
-from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-import auth as auth_mod  # JWT / Fernet / PBKDF2 见 backend/auth.py
-
-from src.data.data_loader import load_load_data
-from src.data import upload_adapter as _upload_adapter
-from src.data.data_generator import price_by_hour
+from src import __version__
+from src.agents.chat_agent import AgentContext, SchedulingTools, create_agent
 from src.agents.coordinator_agent import CoordinatorAgent
+from src.agents.demand_response_agent import DRSignal
 from src.agents.langgraph_coordinator import LangGraphCoordinator
 from src.agents.storage_optimization_agent import StorageOptimizationAgent
-from src.agents.demand_response_agent import DRSignal
-from src.agents.chat_agent import create_agent, AgentContext, SchedulingTools
-from src.utils.config import CONFIG
-from src.utils import trace
-from src import __version__
-from src.utils import cache_security
-from src.utils.config import use_config, active_config
-from src.utils.logger import get_logger
-from src.utils.url_guard import assert_safe_llm_url, normalize_llm_base_url, SSRFBlockedError
+from src.data import upload_adapter as _upload_adapter
+from src.data.data_generator import price_by_hour
+from src.data.data_loader import load_load_data
 from src.services import model_config_service
-from dataclasses import replace
+from src.utils import cache_security, trace
+from src.utils.config import CONFIG, active_config, use_config
+from src.utils.logger import get_logger
+from src.utils.url_guard import SSRFBlockedError, assert_safe_llm_url, normalize_llm_base_url, safe_urlopen
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _log = get_logger("server")
@@ -108,8 +104,11 @@ class AppState:
         self.mp_state = self._load_model_config()
         self.mp_edit_id = self.mp_state.get("active_id")
         # --- 对话 ---
-        self.chat_history = [{"role": "assistant",
-                              "content": "你好！我是储能调度助手。可以问我收益、温度、调度原因，或让我调参重跑。输入「帮助」查看全部功能。"}]
+        self.chat_history = [{
+            "role": "assistant",
+            "content": "你好！我是储能调度助手。可以问我收益、温度、调度原因，"
+                       "或让我调参重跑。输入「帮助」查看全部功能。",
+        }]
 
     # ---------- 数据 ----------
     @property
@@ -172,12 +171,15 @@ class AppState:
         for p in self.mp_state.get("providers", []):
             if p["id"] == act:
                 return p
-        return (self.mp_state.get("providers") or [{"name": "未配置", "base_url": "", "api_key": "", "models": ["deepseek-chat"]}])[0]
+        _fallback = [{"name": "未配置", "base_url": "", "api_key": "",
+                      "models": ["deepseek-chat"]}]
+        return (self.mp_state.get("providers") or _fallback)[0]
 
     def active_llm(self):
         """(api_key, base_url, model, params)——对话Agent与解释层的唯一取值入口。"""
         p = self.active_provider()
-        params = self.mp_state.get("llm_params", {"temperature": 0.3, "max_tokens": 2048, "timeout": 60, "stream": False})
+        _default_params = {"temperature": 0.3, "max_tokens": 2048, "timeout": 60, "stream": False}
+        params = self.mp_state.get("llm_params", _default_params)
         key = p.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
         model = p["models"][0] if p.get("models") else "deepseek-chat"
         return key, p.get("base_url", ""), model, params
@@ -242,14 +244,39 @@ def _all_sessions():
     with _SESSIONS_LOCK:
         return list(_SESSIONS.values()) + [_DEFAULT_SESSION]
 
-STAGE_MAP = {
-    "init": ("✓ 初始化完成 · 正在负荷预测（XGBoost）", 25),
-    "load_forecast": ("✓ 负荷预测完成 · 正在 MILP 优化求解（最耗时，约 1 分钟）", 40),
-    "storage_optimization": ("✓ MILP 求解完成 · 正在叠加需求响应", 75),
-    "dr_handler": ("✓ 需求响应处理完成 · 正在汇总日报表", 85),
-    "finalize": ("✓ 日报表生成完成 · 正在生成决策解释", 92),
-    "explanation": ("✓ 决策解释完成", 99),
+# 求解阶段时间线——**唯一事实来源**。
+# 前端进度浮层此前自己内联了一份 7 组（百分比 + 文案 + 说明），与这里的
+# STAGE_MAP 手工对表，两边已经漂了一处：前端把"准备调度引擎"标在 3%
+# （一开跑就算完成），而后端 3% 只是刚启动、25% 才是该阶段真正结束。
+# 现在改成一张表：node 完成时的百分比即该阶段里程碑，前端从 /api/bootstrap
+# 的 solve_stages 读取，不再有第二份。
+_SOLVE_STAGE_TABLE = [
+    # (协调器节点, 该阶段结束时的百分比, 时间线文案, 浮层说明)
+    ("init", 25, "准备调度引擎", "加载数据与电池参数，构建优化上下文"),
+    ("load_forecast", 40, "负荷预测（XGBoost）", "XGBoost 时序预测 · 96 点 15 分钟粒度"),
+    ("storage_optimization", 75, "MILP 优化求解（HiGHS）", "HiGHS 求解器 · 热安全 + 寿命约束联合优化"),
+    ("dr_handler", 85, "需求响应叠加", "DR 事件评估与三重校验"),
+    ("finalize", 92, "日报表汇总", "收益构成与 SOC 轨迹汇总"),
+    ("explanation", 99, "AI 决策解释", "规则模板 / LLM 生成决策解释"),
+]
+
+# 节点完成时的过渡文案（显示在浮层主标签上）
+_STAGE_TRANSITIONS = {
+    "init": "✓ 初始化完成 · 正在负荷预测（XGBoost）",
+    "load_forecast": "✓ 负荷预测完成 · 正在 MILP 优化求解（最耗时，约 1 分钟）",
+    "storage_optimization": "✓ MILP 求解完成 · 正在叠加需求响应",
+    "dr_handler": "✓ 需求响应处理完成 · 正在汇总日报表",
+    "finalize": "✓ 日报表生成完成 · 正在生成决策解释",
+    "explanation": "✓ 决策解释完成",
 }
+STAGE_MAP = {node: (_STAGE_TRANSITIONS[node], pct)
+             for node, pct, _label, _desc in _SOLVE_STAGE_TABLE}
+
+# 下发给前端的时间线（末项是"全部完成"，不对应任何节点）
+SOLVE_STAGES = ([{"percent": pct, "label": label, "desc": desc}
+                 for _node, pct, label, desc in _SOLVE_STAGE_TABLE]
+                + [{"percent": 100, "label": "全部完成",
+                    "desc": "调度结果已生成，可查看各页看板"}])
 
 # ================= 数据上传适配（= 原 adapt_uploaded_data） =================
 # 默认分时电价曾在这里又实现一遍，与 PRICE_PERIODS 分叉：24 小时中 11 小时档位不同、
@@ -318,13 +345,17 @@ def _load_disk(cache_key):
     """修复：缓存文件带 HMAC-SHA256 签名，篡改/投毒文件验签失败按未命中处理。
     缓存值从裸 tuple 改为带版本号的 dict（v2），兼容读取旧版 4-tuple。
 
+    载荷格式：v1.2.3 及更早为 pickle（`.pkl`），现为纯 JSON（`.json`）。
+    旧文件因魔数不同一律按未命中处理——保留 pickle 读取路径等于保留 RCE 原语。
+
     viz 完整性校验：缓存命中路径同样要过一遍，否则残缺的 viz 会一路流到前端。
     真实故障：_save_disk 落盘的 viz 恒为 None（解包错位），若不加校验，
     start_solve 会把 s.viz=None 当 cache_hit 返回 → /api/page/* 永远 409、
     前端"多次自动重跑失败"（Web 端白屏）。
     """
     try:
-        obj = cache_security.load_signed(_sess()._SOLVE_DISK_DIR, cache_key + ".pkl")
+        obj = cache_security.load_signed(_sess()._SOLVE_DISK_DIR,
+                                         cache_key + cache_security.CACHE_SUFFIX)
         if isinstance(obj, dict) and obj.get("v") == 2:
             cand = (obj["report"], obj["baseline"], obj["dr"], obj["viz"])
         elif isinstance(obj, tuple) and len(obj) == 4:
@@ -343,7 +374,8 @@ def _load_disk(cache_key):
 
 def _save_disk(cache_key, obj):
     report, baseline, dr, viz = obj
-    cache_security.save_signed(_sess()._SOLVE_DISK_DIR, cache_key + ".pkl",
+    cache_security.save_signed(_sess()._SOLVE_DISK_DIR,
+                               cache_key + cache_security.CACHE_SUFFIX,
                                {"v": 2, "report": report, "baseline": baseline,
                                 "dr": dr, "viz": viz})
     # 每次写入后执行 mtime LRU 淘汰（上限 50 个文件 / 1GB）
@@ -379,7 +411,8 @@ def _do_solve(cache_key: str):
         CONFIG.battery, soc_min=p["soc_min"] / 100, soc_max=p["soc_max"] / 100,
         rated_power_kw=p["rated_power"]))
 
-    price_custom = {"peak": p["price_peak"], "high": p["price_high"], "flat": p["price_flat"], "valley": p["price_valley"]}
+    price_custom = {"peak": p["price_peak"], "high": p["price_high"],
+                    "flat": p["price_flat"], "valley": p["price_valley"]}
     # 默认值从 CONFIG.price 取，不再抄一份字面量：抄的这份会跟着前端设置页走，
     # 而电价口径一改（如 331 号文重推四个价）就会静默判定"用户自定义了电价"，
     # 让每次求解都走一遍"替换价格"分支并覆盖内置数据的价格列。
@@ -589,8 +622,7 @@ def demand_block() -> dict:
     外推——那个数由命令行给：`python -m src.utils.demand_charge --demand-cap 2500`。
     把外推值当实测值显示，是这个仓库最不能接受的错误类型。
     """
-    from src.utils.demand_charge import (basic_charge, effective_contract_kw,
-                                         grid_import_kw, with_mode)
+    from src.utils.demand_charge import basic_charge, effective_contract_kw, grid_import_kw, with_mode
 
     s = _sess()
     viz = s.viz or {}
@@ -665,7 +697,31 @@ async def lifespan(app: FastAPI):
             t.join(timeout=15)
 
 
-app = FastAPI(title="储能调度系统 API", lifespan=lifespan)
+# ---------------------------------------------------------------------------
+# 自动文档开关（ENERGY_ENABLE_DOCS，默认关闭）
+# ---------------------------------------------------------------------------
+# /docs、/redoc、/openapi.json 不在 /api/* 前缀下，此前既不经过 JWT 中间件，
+# 也不在静态文件白名单里——未认证即可拿到全部 28 个端点的签名、参数与响应模型
+# （内网部署时是实打实的信息泄露面）。
+#
+# 而且那两张页面本来就打不开：Swagger UI / ReDoc 的脚本与样式从 jsdelivr CDN 取，
+# 而本项目 CSP 是 script-src 'self'，浏览器会直接拦掉 → 白屏。这同时违背了项目
+# 既有的"零外部 CDN"属性（前端 ECharts 是本地 vendored + SRI）。
+# 所以 README 里"服务启动后可访问 /docs 查看交互式文档"这句，在默认配置下
+# 从来就不成立。
+#
+# 现在：默认不挂载（访问 /docs 落到静态挂载 → 404）；显式 ENERGY_ENABLE_DOCS=1
+# 才挂载，且挂载后仍走 JWT 鉴权（见 _jwt_auth_middleware 的 _DOCS_PATHS 分支），
+# 并只对这几个路径放宽 CSP 以允许 CDN 资源。
+_ENABLE_DOCS = (os.getenv("ENERGY_ENABLE_DOCS") or "").strip().lower() in ("1", "true", "yes", "on")
+
+app = FastAPI(
+    title="储能调度系统 API",
+    lifespan=lifespan,
+    docs_url="/docs" if _ENABLE_DOCS else None,
+    redoc_url="/redoc" if _ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if _ENABLE_DOCS else None,
+)
 try:
     AUTH = auth_mod.AuthStore()
 except auth_mod.AuthConfigError as _auth_cfg_err:
@@ -676,12 +732,17 @@ except auth_mod.AuthConfigError as _auth_cfg_err:
     print("=" * 62, file=sys.stderr)
     print(str(_auth_cfg_err), file=sys.stderr)
     print("=" * 62, file=sys.stderr)
-    raise SystemExit(2)
+    # from None：这段提示是刻意写给用户看的，不想要 SystemExit 后面再挂一串
+    # 只有开发者才读得懂的调用栈（原因本身已经逐行打印在上面了）。
+    raise SystemExit(2) from None
 
 # /api/* 统一 JWT 认证（静态资源与 /api/auth/login、/api/system-info 豁免）
 _AUTH_EXEMPT = {"/api/auth/login", "/api/system-info"}
 # must_change=true 期间仅放行改密接口（此前只回传标志不做拦截，默认口令可直调全部 /api/*）
 _MUST_CHANGE_ALLOW = {"/api/auth/change-password"}
+# 自动文档路径——它们不在 /api/* 前缀下，必须显式纳入鉴权判定，否则未认证
+# 就能拿到全部端点签名（ENERGY_ENABLE_DOCS=1 时才真正挂载，见上面的开关）。
+_DOCS_PATHS = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
 
 # 安全响应头（CSP/XFO/nosniff/Referrer-Policy；HTTPS/HSTS 需反代层配置）
 # 补 HSTS——HTTPS 部署时强制浏览器后续走 TLS，防 SSL 降级中间人
@@ -698,12 +759,21 @@ _SECURITY_HEADERS = {
                                 "connect-src 'self'; "
                                 "object-src 'none'; base-uri 'self'"),
 }
+# 文档页专用 CSP：Swagger UI / ReDoc 的脚本、样式与字体都在 jsdelivr 上，
+# 用上面的全局策略会直接白屏（这正是 README 里 /docs 一直打不开的原因）。
+# 只在 ENERGY_ENABLE_DOCS=1 且路径属于 _DOCS_PATHS 时替换，其余请求不受影响。
+_DOCS_CSP = ("default-src 'self'; img-src 'self' data: https://fastapi.tiangolo.com; "
+             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+             "font-src 'self' data: https://fonts.gstatic.com; "
+             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+             "connect-src 'self'; "
+             "object-src 'none'; base-uri 'self'")
 
 # 登录限流（IP+账号维度，指数退避锁定）——PBKDF2 20万迭代单次约百毫秒 CPU，
 # 不限流则既可爆破又构成未认证 CPU 放大 DoS
 # 两个字典此前无清理机制——攻击者用 1 个 IP + 海量不同 username 打
 # /api/auth/login 可把内存灌到 GB 级（OOM DoS）。现在：
-#   1) 条目数上限 _LOGIN_MAX_ENTRIES，超出按插入序淘汰最旧项；
+#   1) 条目数上限 _LOGIN_MAX_ENTRIES，超出**只淘汰已过期条目**；
 #   2) 后台 sweeper 线程每 5 分钟清理已过期（locked_until < now）的锁定记录。
 _LOGIN_FAILS: dict = {}          # key -> fail_count
 _LOGIN_LOCKED_UNTIL: dict = {}   # key -> lock_until timestamp
@@ -711,7 +781,8 @@ _LOGIN_LOCK = threading.Lock()
 _LOGIN_MAX_FAILS = 5
 _LOGIN_BASE_LOCK_S = 30
 _LOGIN_MAX_LOCK_S = 900
-_LOGIN_MAX_ENTRIES = 10000       # 防字典无界增长（内存 DoS）
+_LOGIN_MAX_ENTRIES = 10000       # 常规上限：超出时淘汰已过期条目
+_LOGIN_HARD_MAX_ENTRIES = 20000  # 硬上限：全是未过期锁定时拒绝新 key，绝不淘汰锁定
 
 
 def _login_gate_key(ip: str, username: str) -> str:
@@ -727,19 +798,55 @@ def _login_rate_limited(key: str) -> Optional[int]:
         return None
 
 
+def _login_entry_evictable(key: str, now: float) -> bool:
+    """该 key 的锁定窗口是否已结束（=可以淘汰）。"""
+    until = _LOGIN_LOCKED_UNTIL.get(key)
+    return not until or until < now
+
+
+def _login_prune_over_cap(now: float) -> None:
+    """把两个字典压回常规上限内——**只淘汰已过期的条目，绝不淘汰生效中的锁定**。
+
+    此前的淘汰是纯插入序 FIFO（`pop(next(iter(d)))`），存在一条真实的锁定绕过链：
+    攻击者用 1 个 IP 轮换海量不同 username 打 /api/auth/login，每个 key 失败 5 次
+    即写入锁定记录；灌满 10000 条后 FIFO 会把**最旧的**条目挤出去——而 admin 的
+    锁定记录恰好最旧，于是"已锁定"被洗成"未锁定"，限流形同虚设（配合 PBKDF2
+    的百毫秒级成本，等于把爆破重新打开）。
+
+    锁定是安全状态，不能因为表满而被丢弃。规则改为：
+      1) 先淘汰锁定窗口已结束的条目（它们本来就会被 sweeper 清掉）；
+      2) 仍超限则不淘汰，由 `_login_record_fail` 拒绝为新 key 记账；
+      3) `_LOGIN_HARD_MAX_ENTRIES` 是内存硬兜底，同样表现为"拒新 key"而非"丢锁定"。
+    """
+    for d in (_LOGIN_FAILS, _LOGIN_LOCKED_UNTIL):
+        while len(d) > _LOGIN_MAX_ENTRIES:
+            victim = next((k for k in d if _login_entry_evictable(k, now)), None)
+            if victim is None:
+                break  # 全是生效中的锁定：不淘汰（内存由硬上限 + 拒新 key 兜底）
+            d.pop(victim, None)
+
+
 def _login_record_fail(key: str):
     with _LOGIN_LOCK:
+        now = time.time()
+        _login_prune_over_cap(now)  # 先腾出已过期的位置
+        if key not in _LOGIN_FAILS and len(_LOGIN_FAILS) >= _LOGIN_HARD_MAX_ENTRIES:
+            # 表里全是生效中的锁定且已达硬上限：宁可不为新 key 记账，也不淘汰锁定。
+            # 达到这个状态需要攻击者先制造 2 万条真实锁定（≈10 万次 PBKDF2 校验）。
+            _log.warning("登录失败表已达硬上限 %d 且无可淘汰的过期条目，"
+                         "本轮不为新 key 记账（锁定记录优先保留）：%s",
+                         _LOGIN_HARD_MAX_ENTRIES, key)
+            return
         fails = _LOGIN_FAILS.get(key, 0) + 1
         _LOGIN_FAILS[key] = fails
         if fails >= _LOGIN_MAX_FAILS:
             lock_s = min(_LOGIN_BASE_LOCK_S * (2 ** (fails - _LOGIN_MAX_FAILS)), _LOGIN_MAX_LOCK_S)
-            _LOGIN_LOCKED_UNTIL[key] = time.time() + lock_s
+            _LOGIN_LOCKED_UNTIL[key] = now + lock_s
             _log.warning("登录失败过多，已锁定 %ss：ip/账号=%s（第 %d 次失败）", lock_s, key, fails)
-        # 条目数超限时按插入序淘汰最旧项（dict 保留插入序）
-        while len(_LOGIN_FAILS) > _LOGIN_MAX_ENTRIES:
-            _LOGIN_FAILS.pop(next(iter(_LOGIN_FAILS)))
-        while len(_LOGIN_LOCKED_UNTIL) > _LOGIN_MAX_ENTRIES:
-            _LOGIN_LOCKED_UNTIL.pop(next(iter(_LOGIN_LOCKED_UNTIL)))
+        # 写入后再压一次：入口那次只能腾出"调用前就已超限"的位置，本次插入
+        # 会让计数再 +1。两次合起来才真正维持 len <= _LOGIN_MAX_ENTRIES
+        # （仍受"只淘汰已过期条目"约束，全是生效中锁定时保持原样）。
+        _login_prune_over_cap(now)
 
 
 def _login_sweeper_loop():
@@ -763,7 +870,13 @@ def _login_record_success(key: str):
 @app.middleware("http")
 async def _jwt_auth_middleware(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api/") and path not in _AUTH_EXEMPT:
+    # 自动文档同样要鉴权：/docs、/redoc、/openapi.json 不在 /api/ 前缀下，
+    # 只认前缀的话它们会绕过整个认证（未认证即可读到全部端点签名与模型）。
+    # 注意只在 _ENABLE_DOCS 为真时才算——关闭时这些路由根本没挂载，硬套鉴权会让
+    # 一个不存在的路径返回 401（等于告诉未认证访客"这里有东西"），语义不对。
+    _needs_auth = ((path.startswith("/api/") and path not in _AUTH_EXEMPT)
+                   or (_ENABLE_DOCS and path in _DOCS_PATHS))
+    if _needs_auth:
         raw = request.headers.get("Authorization") or ""
         token = raw[7:].strip() if raw.startswith("Bearer ") else ""
         payload = auth_mod.jwt_verify(token)
@@ -785,11 +898,125 @@ async def _jwt_auth_middleware(request: Request, call_next):
     response = await call_next(request)
     for k, v in _SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
+    # 文档页是唯一允许取 CDN 资源的例外：Swagger UI / ReDoc 的 js/css 都在 jsdelivr 上，
+    # 用全局的 script-src 'self' 会让页面白屏。仅在这几个路径上放宽，其余保持默认。
+    if _ENABLE_DOCS and path in _DOCS_PATHS:
+        response.headers["Content-Security-Policy"] = _DOCS_CSP
     return response
 
 
+# ---------------------------------------------------------------------------
+# 请求体大小上限（防未认证/已认证的内存放大 DoS）
+# ---------------------------------------------------------------------------
+# 此前只有 /api/upload 自己判 50MB，其余 JSON 端点（/api/chat、/api/params、
+# /api/providers/save、/api/auth/login…）**没有任何 body 上限**：Starlette 会把
+# 整个请求体读进内存交给 pydantic 解析，一个未认证请求发 1GB JSON 就能把进程
+# 打到 OOM。这里在中间件层兜住：
+#   1) 有 Content-Length 时先判长度，超限直接 413，连 body 都不读；
+#   2) 无 Content-Length（chunked）时包一层 receive 计数器，累计超限即中断。
+#
+# ⚠️ 必须是**纯 ASGI 中间件**，不能写 `@app.middleware("http")`：
+#    Starlette 的 BaseHTTPMiddleware 会在 __call__ 里把**原始的** receive 捕获进
+#    `_CachedRequest`，`call_next` 用的是那个捕获值。所以在 dispatch 里替换
+#    `request._receive` 对下游完全无效——只有直接包 ASGI 的 receive 才拦得住。
+_BODY_LIMIT_DEFAULT = 1 * 1024 * 1024        # 1MB：JSON 端点（对话/参数/供应商配置）
+_BODY_LIMIT_UNLIMITED = 0                    # 0 = 交给端点自己管（见下）
+# /api/upload 已有自己的一套 50MB 限制（Content-Length 预判 + 分块流式累计），
+# 响应体是 {"ok": false, "msg": "文件超过 50MB 上限"} 且被测试钉住。若这里再拦一道，
+# 同一份上限会出现两个所有者、两种响应形状（413 {"detail"} vs 400 {"ok","msg"}），
+# 前端 upload 分支读的是 msg —— 会退化成英文 statusText。故显式豁免，单一所有者。
+_BODY_LIMIT_PATHS = {"/api/upload": _BODY_LIMIT_UNLIMITED}
+
+
+class _BodyTooLargeError(Exception):
+    """请求体超过该路径的上限——由中间件转成 413。"""
+
+
+def _body_limit_for(path: str) -> Optional[int]:
+    """返回该路径的 body 上限字节数；None = 本中间件不管（端点自管）。"""
+    limit = _BODY_LIMIT_PATHS.get(path, _BODY_LIMIT_DEFAULT)
+    return limit if limit > 0 else None
+
+
+class BodySizeLimitMiddleware:
+    """纯 ASGI 中间件：按路径限制请求体字节数，超限返回 413。
+
+    注册在鉴权中间件**之后**（`add_middleware` 后注册者在外层），因此超限请求
+    在 JWT 校验之前就被拒掉——未认证的大 body 打不到 PBKDF2/JWT 逻辑。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        limit = _body_limit_for(path)
+        if limit is None:
+            # 该路径的上限由端点自己负责（/api/upload 的 50MB 是它自己的契约，
+            # 响应形状 {"ok": false, "msg": ...} 也被前端与测试依赖）。
+            await self.app(scope, receive, send)
+            return
+        raw_headers = scope.get("headers") or []
+        _cl = next((v for k, v in raw_headers if k == b"content-length"), None)
+        if _cl is not None:
+            try:
+                _cl_int = int(_cl)
+            except (TypeError, ValueError):
+                _cl_int = None
+            if _cl_int is not None and _cl_int > limit:
+                _log.warning("请求体超过上限被拒：%s %s Content-Length=%s limit=%d",
+                             scope.get("method"), path, _cl_int, limit)
+                await self._reject(send, limit)
+                return
+
+        total = 0
+        response_started = False
+
+        async def _counting_receive():
+            nonlocal total
+            message = await receive()
+            if message.get("type") == "http.request":
+                total += len(message.get("body", b"") or b"")
+                if total > limit:
+                    raise _BodyTooLargeError()
+            return message
+
+        async def _send(message):
+            nonlocal response_started
+            if message.get("type") == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, _counting_receive, _send)
+        except _BodyTooLargeError:
+            _log.warning("请求体流式读取超限被中断：%s %s limit=%d",
+                         scope.get("method"), path, limit)
+            if not response_started:
+                await self._reject(send, limit)
+            # 响应已开始：无法再改状态码，只能让连接断在这里（body 已被截断，
+            # 下游拿到的是半截请求，pydantic 会自己报 422/400）。
+
+    @staticmethod
+    async def _reject(send, limit: int) -> None:
+        body = json.dumps(
+            {"detail": f"请求体超过 {limit // (1024 * 1024)}MB 上限"},
+            ensure_ascii=False).encode("utf-8")
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json; charset=utf-8"),
+                                (b"content-length", str(len(body)).encode("ascii"))]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(BodySizeLimitMiddleware)
+
+
 def _engine_config() -> dict:
-    """引擎侧真实参数：前端热参数与电价时段展示的唯一数据源。"""
+    """引擎侧真实参数：前端热参数、衰减系数与电价时段展示的唯一数据源。"""
     from src.data.data_generator import PRICE_PERIODS
     b = active_config().battery
     pr = active_config().price
@@ -801,6 +1028,14 @@ def _engine_config() -> dict:
             "efficiency_pct": round(b.charge_efficiency * 100),
             "temp_normal_max": b.temp_normal_max,
             "temp_safe_max": b.temp_safe_max,
+        },
+        # SOC 区间衰减系数：与优化器计费口径**同源**（都来自 battery.degradation_coeff）。
+        # 此前热管理页那张柱状图把 [3.0, 1.5, 1.0, 1.8] 硬编码在 web/js/pages.js 里，
+        # 而引擎侧 0.8-1.0 区间是 2.0 —— 用户看到 1.8，优化器按 2.0 收费。
+        "degradation": {
+            "soc_coeff": dict(b.degradation_coeff),
+            "unit_cost_yuan_per_kwh": round(
+                b.total_battery_cost / (2.0 * b.rated_capacity_kwh * b.cycle_life), 6),
         },
         "price_periods": [
             {k: period[k] for k in ("name", "cls", "hours")}
@@ -845,12 +1080,41 @@ def bootstrap():
             "version": __version__,
             # -15：引擎参数唯一事实来源，前端展示一律从此读取，禁止硬编码
             "engine_config": _engine_config(),
+            # 求解阶段时间线唯一事实来源（与 STAGE_MAP 同表派生）：
+            # 此前前端 app.js 自己内联了 7 组百分比与文案，两边手工对表且已经漂了一处
+            # ——前端把"准备调度引擎"标在 3%（一开跑就算完成），而后端 3% 只是刚启动、
+            # 25% 才是该阶段真正结束。现在前端只负责渲染这张表。
+            "solve_stages": SOLVE_STAGES,
         }
 
 
 class SolveReq(BaseModel):
     date: Optional[str] = None
     force: bool = False
+
+    @field_validator("date")
+    @classmethod
+    def _date_must_be_plain_iso_day(cls, v: Optional[str]) -> Optional[str]:
+        """调度日必须是 `YYYY-MM-DD` 这一天本身，不能夹带路径片段。
+
+        为什么必须校验（P1.5，路径穿越）：这个值会被拼进页面级缓存的文件名
+        （`ck = f"pe_{fp8}_{selected_date}_..."`），而 `pd.to_datetime` 对
+        `'2024-07-15/../../..'` 是**解析成功**的——它照样给出 2024-07-15，
+        于是日期看起来正常，缓存路径却跳出了 `.solve_cache`：两个普通鉴权请求
+        就能在仓库树里落一个带真实签名的文件，或压到另一天的缓存条目上
+        （跨条目投毒）。前端只可能传数据集里的真实日期，收紧成 ISO 日期
+        不影响任何正常路径，`tests/test_price_calendar.py` 另有正则守卫。
+        """
+        if v is None:
+            return None
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            raise ValueError(f"date 必须是 YYYY-MM-DD 格式的调度日，收到 {v!r}")
+        try:
+            # 正则只保证形状，这里再确认它是一个真实存在的日期（拒绝 2024-13-45）
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(f"date 不是有效日期: {v!r}") from exc
+        return v
 
 
 @app.post("/api/solve")
@@ -999,7 +1263,8 @@ def _compute_pure_econ():
             return
         # 磁盘缓存优先（内存未命中：首次访问或服务重启后）
         try:
-            disk_obj = cache_security.load_signed(_sess()._SOLVE_DISK_DIR, ck + ".pkl")
+            disk_obj = cache_security.load_signed(_sess()._SOLVE_DISK_DIR,
+                                                  ck + cache_security.CACHE_SUFFIX)
             if isinstance(disk_obj, dict) and disk_obj.get("v") == 2:
                 _sess().pe_report = disk_obj["pe_report"]
                 _sess().pe_viz = disk_obj["pe_viz"]
@@ -1012,7 +1277,10 @@ def _compute_pure_econ():
             CONFIG.battery, soc_min=p["soc_min"] / 100, soc_max=p["soc_max"] / 100,
             rated_power_kw=p["rated_power"]))
         with use_config(_pe_cfg):
-            coord = LangGraphCoordinator(_pe_cfg) if p["orchestrator"] == "LangGraph" else CoordinatorAgent(config=_pe_cfg)
+            if p["orchestrator"] == "LangGraph":
+                coord = LangGraphCoordinator(_pe_cfg)
+            else:
+                coord = CoordinatorAgent(config=_pe_cfg)
             pe_report = coord.run_daily_scheduling(
                 date=_sess().selected_date, historical_data=_sess().df, dr_signals=_sess().dr_signals,
                 use_ml_forecast=p["use_ml_forecast"], include_thermal=False, include_degradation=False)
@@ -1021,7 +1289,8 @@ def _compute_pure_econ():
         _sess().pe_cache_key = ck
         # 落盘（失败不致命：下次重算即可）
         try:
-            cache_security.save_signed(_sess()._SOLVE_DISK_DIR, ck + ".pkl",
+            cache_security.save_signed(_sess()._SOLVE_DISK_DIR,
+                                       ck + cache_security.CACHE_SUFFIX,
                                        {"v": 2, "pe_report": pe_report, "pe_viz": _sess().pe_viz})
         except Exception:
             log.warning("thermal pe 磁盘缓存写入失败", exc_info=True)
@@ -1089,7 +1358,8 @@ def page_dr():
         sig = _sess().dr_signals[i] if i < len(_sess().dr_signals) else None
         t = (f"{pd.to_datetime(sig.start_time).strftime('%H:%M')}-{pd.to_datetime(sig.end_time).strftime('%H:%M')}"
              if sig else "-")
-        dtype = "削峰" if sig and sig.dr_type == "peak_shaving" else "填谷" if sig and sig.dr_type == "valley_filling" else "备用"
+        _dt_map = {"peak_shaving": "削峰", "valley_filling": "填谷"}
+        dtype = _dt_map.get(sig.dr_type, "备用") if sig else "备用"
         hist.append({"time": t, "type": dtype,
                      "target": f"{sig.target_reduction_kw:.0f}" if sig else "-",
                      "energy": f"{d.response_energy_kwh:.0f}",
@@ -1225,7 +1495,9 @@ async def upload(request: Request, file: UploadFile = File(...)):
         if not udf["timestamp"].is_monotonic_increasing:
             return JSONResponse({"ok": False, "msg": "时间戳未按升序排列（要求时间连续有序）"}, status_code=400)
         if len(udf) < 96:
-            return JSONResponse({"ok": False, "msg": f"数据仅 {len(udf)} 条，至少需要 96 条（一天 15min 粒度）"}, status_code=400)
+            return JSONResponse(
+                {"ok": False, "msg": f"数据仅 {len(udf)} 条，至少需要 96 条（一天 15min 粒度）"},
+                status_code=400)
         for _col, _lo, _hi, _name in [("load_kw", 0, 5e5, "负荷"),
                                       ("price_yuan_per_kwh", 0, 20, "电价"),
                                       ("ambient_temp_c", -60, 90, "温度")]:
@@ -1441,12 +1713,16 @@ class DRReq(BaseModel):
 
 @app.post("/api/dr/trigger")
 def dr_trigger(req: DRReq):
-    import re as _re
     # 时间格式/顺序校验 + 与已有手动 DR 事件重叠阻断（force=true 强制叠加）
+    # （re 已提到模块级 import：P1.5 的 SolveReq.date 校验也要用，函数内再 import 一份
+    #   会让"这个模块到底用不用 re"有两个答案。）
     for _t in (req.start, req.end):
-        if not _re.match(r"^\d{2}:\d{2}$", _t):
+        if not re.match(r"^\d{2}:\d{2}$", _t):
             raise HTTPException(400, "时间格式应为 HH:MM（如 08:00）")
-    _m = lambda t: int(t[:2]) * 60 + int(t[3:5])
+    # HH:MM → 当日分钟数。原先写成 `_m = lambda t: ...`，lambda 赋值在 traceback 里
+    # 只会显示 `<lambda>`，定位不到这一行；改用具名函数。
+    def _m(t: str) -> int:
+        return int(t[:2]) * 60 + int(t[3:5])
     if _m(req.start) >= _m(req.end):
         raise HTTPException(400, "开始时间必须早于结束时间")
     # 补业务范围校验——此前仅 target>0，target=1e9 / subsidy=9999 /
@@ -1473,9 +1749,12 @@ def dr_trigger(req: DRReq):
                 {"ok": False, "overlap": True, "overlaps": _overlaps,
                  "msg": f"与已有DR事件时间重叠：{'、'.join(_overlaps)}；确需叠加请再次提交（force）"},
                 status_code=409)
-        sig = DRSignal(start_time=f"{_sess().selected_date} {req.start}", end_time=f"{_sess().selected_date} {req.end}",
-                       target_reduction_kw=float(req.target), subsidy_per_kwh=float(req.subsidy),
-                       dr_type={"削峰": "peak_shaving", "填谷": "valley_filling", "备用": "reserve"}.get(req.dr_type, "peak_shaving"))
+        _DR_TYPE_MAP = {"削峰": "peak_shaving", "填谷": "valley_filling", "备用": "reserve"}
+        sig = DRSignal(start_time=f"{_sess().selected_date} {req.start}",
+                       end_time=f"{_sess().selected_date} {req.end}",
+                       target_reduction_kw=float(req.target),
+                       subsidy_per_kwh=float(req.subsidy),
+                       dr_type=_DR_TYPE_MAP.get(req.dr_type, "peak_shaving"))
         _sess().manual_dr_signals.append(sig)
         _sess().clear_solve_state()
     return {"ok": True, "msg": f"已触发DR事件：{req.start}-{req.end} · 目标{req.target:.0f}kW",
@@ -1546,7 +1825,10 @@ def test_provider(req: ProviderTestReq):
             request = _ureq.Request(base + "/chat/completions", data=body, method="POST",
                                     headers={"content-type": "application/json",
                                              "Authorization": f"Bearer {key}"})
-        with _ureq.urlopen(request, timeout=15) as resp:
+        # safe_urlopen：把连接钉死在 assert_safe_llm_url 已校验的那个 IP 上，
+        # 并拒绝跟随重定向——否则 urlopen 会二次解析域名（DNS rebinding）
+        # 或 302 到内网地址，把上面那次校验整个绕过去。
+        with safe_urlopen(request, timeout=15) as resp:
             resp.read()
         return {"ok": True, "msg": f"连接成功（{time.time()-t0:.1f}s · {model}）"}
     except Exception as e:
@@ -1579,7 +1861,9 @@ def explain():
 
 # ---------------- 对话 ----------------
 class ChatReq(BaseModel):
-    message: str
+    # 上限与中间件的 1MB body 上限互补：单条消息 8000 字符远够用，且能挡住
+    # "一条超长消息撑爆上下文/账单"的滥用（pydantic 在解析阶段就拒绝）。
+    message: str = Field(..., max_length=8000)
 
 
 @app.post("/api/chat")
@@ -1811,7 +2095,8 @@ def auth_change_password(req: ChangePwdReq):
         AUTH.set_password(req.new_password)
     except auth_mod.AuthModeError as e:
         # env 模式下口令由环境变量托管，应用内改密无意义——给出可执行的改法而不是 500
-        raise HTTPException(400, str(e))
+        # from e：保留原始异常链，排障时能看到是"哪种认证模式不支持改密"。
+        raise HTTPException(400, str(e)) from e
     return {"ok": True, "msg": "口令已更新，请使用新口令重新登录"}
 
 
@@ -1842,7 +2127,6 @@ def trace_detail(run_id: str):
 
 @app.get("/api/system-info")
 def system_info():
-    import platform
     try:
         from importlib.metadata import version as pv
         lg_ver = pv("langgraph")
@@ -1883,10 +2167,18 @@ class _GuardedStaticFiles(StaticFiles):
         return response
 
 
-app.mount("/", _GuardedStaticFiles(directory=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web"), html=True), name="web")
+# 静态资源根 = 项目根下的 web/（backend/server.py → parents[1] = 项目根）
+_WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+app.mount("/", _GuardedStaticFiles(directory=_WEB_DIR, html=True), name="web")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """启动开发服务器（`python backend/server.py` 与 `tideshift` 命令的共同入口）。
+
+    抽成函数的理由：原先这段只在 `if __name__ == "__main__"` 里，于是
+    pyproject.toml 的 `[project.scripts]` 指不到任何可调用对象，
+    `pip install -e .` 装出来的命令行入口必然是坏的。抽出来后两条路径同一份代码。
+    """
     import uvicorn
     # host/port/日志级别改环境变量覆盖，公网部署不再必须改代码
     _host = os.getenv("ENERGY_HOST", "127.0.0.1")
@@ -1894,3 +2186,7 @@ if __name__ == "__main__":
     _log_level = os.getenv("ENERGY_LOG_LEVEL", "info")
     log.info(f"储能调度系统 Web · http://{_host}:{_port}")
     uvicorn.run(app, host=_host, port=_port, log_level=_log_level)
+
+
+if __name__ == "__main__":
+    main()
