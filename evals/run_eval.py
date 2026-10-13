@@ -20,8 +20,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from evals.harness import (BASELINE_PATH, REPORTS_DIR, build_env, load_suite,
-                           run_suite)
+from evals.harness import BASELINE_PATH, REPORTS_DIR, build_env, load_suite, run_suite
 from evals.metrics import aggregate, compare_to_baseline
 
 _MODES = ("rule", "llm")

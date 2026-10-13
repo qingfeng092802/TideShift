@@ -10,8 +10,16 @@ import pytest
 
 from evals.grounding import render_probe, run_probe
 from evals.harness import load_suite, validate_suite
-from evals.metrics import (TOOL_NAMES, ToolCall, aggregate, check_tool_expectation,
-                           compare_to_baseline, number_in_text, percentile, score_case)
+from evals.metrics import (
+    TOOL_NAMES,
+    ToolCall,
+    aggregate,
+    check_tool_expectation,
+    compare_to_baseline,
+    number_in_text,
+    percentile,
+    score_case,
+)
 from evals.recorder import install
 
 

@@ -25,10 +25,9 @@ PROJECT_ROOT = os.path.dirname(EVALS_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from evals.grounding import run_probes                       # noqa: E402
-from evals.metrics import (CaseResult, GroundingProbeResult, TOOL_NAMES,  # noqa: E402
-                           score_case)
-from evals.recorder import DEFAULT_STUB_TOOLS, install        # noqa: E402
+from evals.grounding import run_probes  # noqa: E402
+from evals.metrics import TOOL_NAMES, CaseResult, GroundingProbeResult, score_case  # noqa: E402
+from evals.recorder import DEFAULT_STUB_TOOLS, install  # noqa: E402
 
 CASES_PATH = os.path.join(EVALS_DIR, "cases.yaml")
 REPORTS_DIR = os.path.join(EVALS_DIR, "reports")
@@ -154,6 +153,7 @@ def build_env(date: Optional[str] = None, use_ml_forecast: Optional[bool] = None
         use_ml_forecast=ml, include_thermal=True, include_degradation=True)
 
     import numpy as np
+
     from src.data.data_loader import day_price_temp
     # 与协调器同源取当日序列：`generate_ambient_temp` 含未播种噪声，直接调它会让
     # baseline 每天抽一条新气温曲线，评测里的对比项就跟着漂。

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence
 
 from evals.metrics import GroundingProbeResult
 from src.agents.llm_explainer import check_grounding
@@ -46,8 +46,17 @@ def run_probe(probe: Dict[str, Any], digest: Any) -> GroundingProbeResult:
     planted_nums = [float(x) for x in probe.get("planted_numbers") or []]
 
     missed = [f"{v:g}" for v in planted_nums if not _covered(v, flagged_nums)]
-    # 被标注但不属于埋入值的，即为误报（真数字被当成编造）
-    false_pos = [f for f, v in zip(flagged, flagged_nums) if not _covered(v, planted_nums)]
+    # 被标注但不属于埋入值的，即为误报（真数字被当成编造）。
+    #
+    # 逐条就地取数，不再 zip(flagged, flagged_nums)：`_floats` 会丢掉**没有数字**的
+    # 条目（例如"未匹配到"这类纯文字告警），于是两个列表长度可以不等，
+    # zip 会把第 1 条的数字配到第 0 条上，误报清单整体错位。
+    # 这种错位不会报错，只会让"误报率"这个指标悄悄失真 —— 而它正是本文件的被测对象。
+    false_pos: List[str] = []
+    for f in flagged:
+        nums = _floats([f])
+        if nums and not _covered(nums[0], planted_nums):
+            false_pos.append(f)
 
     return GroundingProbeResult(
         probe_id=str(probe.get("id", "?")),
