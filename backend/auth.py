@@ -12,19 +12,21 @@ verify() 的 hmac.compare_digest 比较前统一 encode 成 bytes——
   str 含非 ASCII（如中文用户名）时 compare_digest 会抛 TypeError 导致 500。
 密钥文件生成加 O_EXCL 锁，防首启并发双写互相覆盖。
 """
-from src.utils.logger import get_logger
-log = get_logger(__name__)
 import base64
 import hashlib
 import hmac
 import json
 import os
 import secrets
-import subprocess
 import time
 from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from src.utils.file_perms import harden_file_permissions as _harden_permissions
+from src.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 _JWT_TTL_S = 12 * 3600
 _PBKDF2_ITERS = 200_000
@@ -77,36 +79,6 @@ def auth_mode() -> str:
 def env_password() -> str:
     """环境变量提供的管理员口令（两种模式共用同一变量名，避免文档分裂）。"""
     return (os.environ.get("ADMIN_INITIAL_PASSWORD") or "").strip()
-
-
-def _harden_permissions(path: str) -> bool:
-    """把文件访问收敛到"仅当前用户"。返回是否**真正生效**（而非尽力而为）。
-
-    为什么要单独一个函数：`os.chmod(0o600)` 只在 POSIX 上是权限边界。
-    **Windows 上 `os.chmod` 只能切换只读位**，实测 `0o600` 写完后 `stat` 仍是 `0o666`
-    ——也就是说在 Windows 上"0600 的一次性口令文件"这个说法不成立，文件对同机其他用户
-    依然可读。因此在 Windows 上额外用 `icacls` 显式收紧 ACL：
-        icacls <file> /inheritance:r /grant:r "<user>:F"
-    切断继承、只给当前用户完全控制（保留 F 而非 R，否则后续 _atomic_write 的
-    os.replace 会因为无权删除目标文件而失败）。
-
-    icacls 不可用或执行失败时返回 False（调用方记录告警），不阻断主流程。
-    """
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    if os.name != "nt":
-        return True                      # POSIX：chmod 已构成权限边界
-    user = (os.environ.get("USERNAME") or os.environ.get("USER") or "").strip()
-    if not user:
-        return False
-    try:
-        r = subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
-                           capture_output=True, timeout=15)
-        return r.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
 
 
 def _atomic_write(path: str, data: bytes):

@@ -4,9 +4,7 @@
 覆盖：JWT 篡改/过期/算法混淆拒绝、错误口令、中文用户名（compare_digest 非 ASCII）、
 初始口令不再使用 admin/admin123、must_change 语义。
 """
-import base64
 import json
-import time
 
 import pytest
 
@@ -109,7 +107,7 @@ def test_persistent_random_boot_writes_one_time_password_file(tmp_path, monkeypa
     st = auth_mod.AuthStore()
     f = tmp_path / auth_mod.INITIAL_PWD_FILENAME
     assert f.exists(), "首启随机口令应写出一次性口令文件"
-    lines = [l for l in f.read_text(encoding="utf-8").splitlines() if l.startswith("初始口令：")]
+    lines = [ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.startswith("初始口令：")]
     assert lines, "一次性口令文件应包含口令行"
     pwd = lines[0].split("：", 1)[1].strip()
     assert len(pwd) >= 12
