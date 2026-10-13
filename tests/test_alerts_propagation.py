@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 import server  # noqa: E402  backend/server.py
-from src.agents.langgraph_coordinator import SchedulingState  # noqa: E402
 
+from src.agents.langgraph_coordinator import SchedulingState  # noqa: E402
 
 # ---------------- 纯函数层：report_dict 的透传契约 ----------------
 

@@ -7,20 +7,17 @@ LangGraph 编排 vs 纯 Python 编排 一致性测试（pytest）
 运行：
     pytest tests/test_langgraph.py -v
 """
-import copy
 import os
 import sys
 
-import numpy as np
-import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.config import CONFIG
 from src.agents.coordinator_agent import CoordinatorAgent
 from src.agents.demand_response_agent import DRSignal
 from src.data.data_loader import load_load_data
+from src.utils.config import CONFIG
 
 # 真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
 pytestmark = pytest.mark.slow
@@ -53,7 +50,9 @@ def py_report(historical):
 
 @pytest.fixture(scope="module")
 def lg_report(historical):
-    lg = pytest.importorskip("langgraph")
+    # importorskip 的返回值（langgraph 模块本身）用不到，这里只需要它的守卫作用：
+    # 未安装 langgraph 时整组测试 skip，而不是在 import 期炸掉收集阶段。
+    pytest.importorskip("langgraph")
     from src.agents.langgraph_coordinator import LangGraphCoordinator
     return LangGraphCoordinator(CFG).run_daily_scheduling(
         date=TARGET_DATE, historical_data=historical,

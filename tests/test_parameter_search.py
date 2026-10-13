@@ -12,8 +12,16 @@ from typing import Any, Dict, List
 import pytest
 
 from src.agents.parameter_search_agent import (
-    MATERIAL_GAIN_RATIO, Candidate, HeuristicProposer, LLMProposer,
-    ParameterSearchAgent, SearchReport, _key, _resample, clamp_params)
+    MATERIAL_GAIN_RATIO,
+    Candidate,
+    HeuristicProposer,
+    LLMProposer,
+    ParameterSearchAgent,
+    SearchReport,
+    _key,
+    _resample,
+    clamp_params,
+)
 from src.utils.config import CONFIG
 
 DATE = "2024-07-30"

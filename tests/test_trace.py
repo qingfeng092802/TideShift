@@ -123,7 +123,7 @@ def test_run_is_appended_to_jsonl():
 
 def test_ring_buffer_is_bounded(monkeypatch):
     monkeypatch.setenv("ENERGY_TRACE_MAX", "3")
-    for i in range(10):
+    for _ in range(10):  # 循环变量本身不用，只是要跑满 10 次
         with trace.run("tick"):
             pass
     assert len(trace.recent(limit=50)) == 3
@@ -217,8 +217,10 @@ def test_traced_tolerates_non_dict_result():
 
 @pytest.fixture(scope="module")
 def client():
+    import os
+    import sys
+
     from fastapi.testclient import TestClient
-    import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), "backend"))
     import server

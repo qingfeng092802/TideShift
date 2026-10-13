@@ -14,11 +14,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.config import CONFIG
-from src.agents.chat_agent import create_agent, AgentContext, SchedulingTools
+from src.agents.chat_agent import AgentContext, SchedulingTools, create_agent
 from src.agents.coordinator_agent import CoordinatorAgent
 from src.agents.demand_response_agent import DRSignal
 from src.data.data_loader import load_load_data
+from src.utils.config import CONFIG
 
 DATE = "2024-07-30"
 
@@ -35,10 +35,12 @@ def tools():
                                         dr_signals=dr_signals, use_ml_forecast=False,
                                         include_thermal=True, include_degradation=True)
     # 基准：同一天的 baseline_strategy 结果（让对比工具返回有内容）
+    import numpy as _np
+    import pandas as _pd
+
     from src.agents.storage_optimization_agent import StorageOptimizationAgent
-    import pandas as _pd, numpy as _np
+    from src.data.data_generator import generate_ambient_temp, generate_price_profile
     from src.data.data_loader import day_price_temp
-    from src.data.data_generator import generate_price_profile, generate_ambient_temp
     # 取当日落盘序列而不是现场 generate：generate_ambient_temp 含未播种噪声，
     # 每次抽一条新气温曲线，baseline 的对比项就跟着漂。
     _pt = day_price_temp(df, DATE)
@@ -246,6 +248,7 @@ def test_tool_chunks_are_recognised_and_dropped():
 def test_astream_yields_only_model_deltas():
     """astream 产出 ("content"|"reasoning", 文本)，工具消息的文本不许出现。"""
     import asyncio
+
     from src.agents.chat_agent import LLMAgent
 
     class Chunk:
@@ -283,7 +286,8 @@ def test_no_key_fallback_says_streaming_will_not_work(caplog):
     日志里什么都不写的话，排查的人会先去查 langchain 装没装（这次就白查了一轮）。
     """
     import logging
-    from src.agents.chat_agent import RuleBasedAgent, AgentContext, create_agent
+
+    from src.agents.chat_agent import AgentContext, RuleBasedAgent, create_agent
 
     with caplog.at_level(logging.INFO, logger="energy_dispatch.chat_agent"):
         agent = create_agent(AgentContext(), api_key="")

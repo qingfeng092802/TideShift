@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.agents.llm_explainer import (
     DEFAULT_MODEL,
     DecisionDigest,
-    ExplanationResult,
     LLMError,
     LLMExplainer,
     build_digest,
@@ -29,7 +28,6 @@ from src.agents.llm_explainer import (
     check_grounding,
     resolve_llm_credentials,
     summarize_windows,
-    template_explain,
 )
 
 

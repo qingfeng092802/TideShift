@@ -15,10 +15,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.config import CONFIG
 from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
 from src.agents.demand_response_agent import DRSignal
-from src.data.data_loader import load_load_data, load_dr_signals
+from src.data.data_loader import load_load_data
+from src.utils.config import CONFIG
 
 # 全流程跑真实 MILP，单文件分钟级——标记 slow，PR CI 默认跳过（nightly 全量跑）
 pytestmark = pytest.mark.slow

@@ -18,9 +18,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.config import CONFIG, internal_resistance_from_efficiency
 from src.agents.storage_optimization_agent import StorageOptimizationAgent
-from src.data.data_generator import generate_price_profile, generate_ambient_temp
+from src.data.data_generator import generate_ambient_temp, generate_price_profile
+from src.utils.config import CONFIG, internal_resistance_from_efficiency
 
 # 真实 MILP/全流程测试，标记 slow，PR CI 默认跳过
 pytestmark = pytest.mark.slow

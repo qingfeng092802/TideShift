@@ -17,11 +17,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.agents.llm_stream_compat import (
+    attach_reasoning_to_payload,
+    chat_model_class,
+    normalize_tool_call_indexes,
+    reasoning_from_chunk_dict,
+)
 from src.utils.url_guard import normalize_llm_base_url
-from src.agents.llm_stream_compat import (attach_reasoning_to_payload,
-                                          chat_model_class,
-                                          normalize_tool_call_indexes,
-                                          reasoning_from_chunk_dict)
 
 
 @pytest.mark.parametrize("raw,want", [

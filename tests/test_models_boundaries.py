@@ -7,9 +7,9 @@
 import numpy as np
 import pytest
 
-from src.utils.config import CONFIG
 from src.models.battery_degradation_model import BatteryDegradationModel
 from src.models.battery_thermal_model import BatteryThermalModel, estimate_temperature_rise
+from src.utils.config import CONFIG
 
 
 def test_estimate_degradation_zero_dod_raises():

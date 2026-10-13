@@ -15,8 +15,14 @@ import pytest
 
 from src.utils.config import CONFIG, DemandTariffConfig, SystemConfig
 from src.utils.demand_charge import (
-    basic_charge, daily_provision_yuan, demand_saving_yuan, effective_contract_kw,
-    grid_import_kw, month_peak_kw, with_contract_kw, with_mode,
+    basic_charge,
+    daily_provision_yuan,
+    demand_saving_yuan,
+    effective_contract_kw,
+    grid_import_kw,
+    month_peak_kw,
+    with_contract_kw,
+    with_mode,
 )
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "utils" / "demand_charge.py"
@@ -133,7 +139,7 @@ def test_prices_are_not_copied_into_this_module():
             and isinstance(tree.body[0].value, ast.Constant)
             and isinstance(tree.body[0].value.value, str)):
         lines = lines[tree.body[0].end_lineno:]
-    code = "\n".join(l for l in lines if not l.strip().startswith("#"))
+    code = "\n".join(ln for ln in lines if not ln.strip().startswith("#"))
     for stale in ("36.1", "22.6", "0.40 *", "1.05", "2.0 *"):
         assert stale not in code, f"demand_charge.py 的代码里出现了抄写的数字：{stale}"
 

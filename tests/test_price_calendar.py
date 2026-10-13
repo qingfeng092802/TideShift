@@ -173,7 +173,7 @@ def test_backend_has_no_second_copy_of_the_windows():
     raw = (Path(__file__).resolve().parents[1] / "backend" / "server.py").read_text(
         encoding="utf-8")
     # 只看代码行：注释里引用旧口径是"为什么改"的记录，不是第二份事实来源
-    code = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("#"))
+    code = "\n".join(ln for ln in raw.splitlines() if not ln.strip().startswith("#"))
     for stale in ("08-10, 18-21", "07-08, 12-18", "00-07, 21-24"):
         assert stale not in code, f"server.py 里又出现抄写的时段口径：{stale}"
 
@@ -182,8 +182,8 @@ def test_backend_has_no_second_copy_of_the_windows():
 def _code_lines(rel_path):
     from pathlib import Path
     raw = (Path(__file__).resolve().parents[1] / rel_path).read_text(encoding="utf-8")
-    keep = [l for l in raw.splitlines()
-            if not l.strip().startswith(("#", "//", "*"))]
+    keep = [ln for ln in raw.splitlines()
+            if not ln.strip().startswith(("#", "//", "*"))]
     return "\n".join(keep)
 
 

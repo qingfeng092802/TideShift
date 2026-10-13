@@ -18,15 +18,24 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.config import CONFIG
 from src.agents.coordinator_agent import CoordinatorAgent, DailyReport
 from src.agents.demand_response_agent import DRSignal
 from src.data.data_loader import load_load_data
+from src.utils.config import CONFIG
 
 # 真实整轮 MILP（含 XGBoost 训练），单轮分钟级以内——PR CI 默认跳过，
 # nightly 与 workflow_dispatch 全量跑。这是刻意的：钉绝对值的代价就是每次
 # 都要真跑一遍，把它放进 PR 只会让人为了省时间而删掉它。
-pytestmark = pytest.mark.slow
+#
+# repro（P1.8）：**同时**带 slow 与 repro 两个标记。带 slow 保持原有语义不变
+# （本机 `pytest` 与 CI 的 fast-tests 都不跑它）；带 repro 是为了给 CI 一条
+# 专线 `pytest -m repro`（见 .github/workflows/ci.yml 的 repro-tests job）。
+# 只加 slow 的话，"物理常数 / 求解器版本一变，README 那五个数还对不对"
+# 这件事在 PR 阶段仍然没有任何人看得见——nightly 报红时改动早已合入。
+# 实测教训：把 soc_min 0.20→0.15，快档 300 项全绿，只有本文件 4 项报红。
+# 常数本身现在由 tests/test_physics_constants.py 在快档钉住（改一个数就红）；
+# 本文件补的是另一半——常数没动、结果却漂了（求解器换版 / 数值内核变化）。
+pytestmark = [pytest.mark.slow, pytest.mark.repro]
 
 CFG = CONFIG
 TARGET_DATE = "2024-07-30"
