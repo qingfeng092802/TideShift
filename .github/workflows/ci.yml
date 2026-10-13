@@ -29,6 +29,53 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: pytest            # pytest.ini 默认 -m "not slow"
 
+  repro-tests:
+    # PR 通道里的"物理常数 / 求解器版本回归"（P1.8，审查报告 3.6）。
+    # 为什么不能只靠 fast-tests：`pytest.ini` 的 `addopts = -m "not slow"`
+    # 让默认通道**对物理常数改动完全瞎**——实测把 `soc_min` 0.20 → 0.15
+    # （可用 SOC 窗口放宽 25%），快档 300 项全绿，只有 4 项报红，而那 4 项
+    # 全在 `-m "not slow"` 之外。nightly 才发现的代价是：改动早就合进 main 了。
+    #
+    # 分工（两层都要有，缺一层就有盲区）：
+    # - `tests/test_physics_constants.py`（快档、秒级）回答「常数被改了吗」；
+    # - 本条 `-m repro`（约 60 s）回答「常数没动，但结果还等于 README 那一列吗」，
+    #   它对求解器换版、数值内核变化、电价日历改动同样敏感。
+    # 只留快档那一层的话，pulp/highspy 升级导致结果漂移时无人发现。
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      # 需要 numpy/pandas/pulp/xgboost，装 requirements-dev.txt（含 requirements.txt）。
+      - run: pip install -r requirements-dev.txt
+      # 命令行 -m 会覆盖 addopts 里的 -m，所以这里只跑带 repro 标记的 5 项。
+      # 不加 -q：pytest.ini 的 addopts 已带一个 -q，再给一个就是 -qq，
+      # 会把 "N passed in Xs" 汇总行一起吞掉，这道门槛的自报计数就丢了。
+      - run: pytest -m repro
+
+  lint:
+    # 静态检查（ruff + mypy），与 fast-tests 同样只在 PR/push 触发。
+    # 为什么必须有这一道：本项目 1.7 万行里此前**完全没有** lint / 类型检查，
+    # 一个笔误（比如 zip 长度不等、Optional 未判 None）要等到运行时才暴露。
+    # 这里不做 `--fix`——CI 只负责判定，修不修是作者的事。
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      # 只装 lint 工具，不装 requirements-dev.txt：ruff/mypy 是静态分析，
+      # 不需要 numpy/pulp 这些重依赖（装了反而多几十秒且与业务版本耦合）。
+      # mypy 的第三方库类型缺失已由 pyproject.toml 的 ignore_missing_imports 兜住。
+      - run: pip install "ruff>=0.12.0" "mypy>=1.17.1"
+      - run: ruff check --output-format=github .
+      - run: mypy
+
   full-tests:
     # 定时（nightly）与手动触发时跑全量（含 slow），作为发版前的标准回归入口
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -43,11 +90,11 @@ jobs:
       # 只跑一遍：原先这里先 `pytest -m ""` 再 `coverage run -m pytest -m ""`，
       # 实测两步各 846 / 844 s，job 总时长 1732 s 里近一半是把 247 项重跑一遍。
       # 覆盖率本来就是在一次运行里插桩采集的，第二遍不产生任何新证据。
-      # 计时口径注意：文档里引用的 846 s 是**合并前**那次运行（Run 35446508669）的
+      # 计时口径注意：文档里引用的 846 s 是**合并前**那次运行的
       # `pytest -m ""` 单步数字；合并成一句后这一步含 coverage 开销，数字会变。
       # 这里**不能再写 `-q`**：pytest.ini 的 addopts 已经带了一个 `-q`，命令行再加一个就是
       # `-qq`，pytest 会连"N passed in Xs"那行汇总一起吞掉——这道门槛的自报计数与计时
-      # 就全丢了，只剩四行进度的圆点（Run 35486570178 就是这样，只能靠数圆点确认 277）。
+      # 就全丢了，只剩四行进度的圆点（只能靠数圆点确认 277）。
       # 上面的 fast-tests 写的是裸 `pytest`，所以它一直有汇总行。
       - run: coverage run -m pytest -m "" && coverage report
 

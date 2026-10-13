@@ -11,3 +11,9 @@
 pytest>=9.1.1,<10.0
 coverage>=7.16.0,<8.0
 httpx>=0.28.1,<1.0        # fastapi.testclient 的底层 HTTP 客户端
+
+# ---- 静态检查（CI 的 lint job 与 .pre-commit-config.yaml 共用同一套） ----
+# 这两条只做静态分析，不 import 业务依赖；版本区间与 pyproject.toml 的
+# [project.optional-dependencies] dev 保持一致，避免两处漂移。
+ruff>=0.12.0
+mypy>=1.17.1

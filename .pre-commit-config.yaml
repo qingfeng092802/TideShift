@@ -1,0 +1,55 @@
+# pre-commit 钩子配置（https://pre-commit.com）
+#
+# 安装：pip install pre-commit && pre-commit install
+# 手动全量跑：pre-commit run --all-files
+#
+# 定位：CI（.github/workflows/ci.yml 的 lint job）是**权威判定**，本文件只是让
+# 同样的判定在提交前就能看到，省一次"推上去才发现"的往返。两者规则集必须一致
+# ——都读 pyproject.toml 里的 [tool.ruff] / [tool.mypy]，所以这里不重复写参数。
+#
+# ⚠️ 本项目是应用而非库，且 web/ 与 data/ 按 __file__ 相对项目根解析
+# （见 pyproject.toml 顶部说明），因此**不装本包自身**，钩子只做静态检查。
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  # ---- ruff：lint + 自动修复（配置在 pyproject.toml） ----
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.0
+    hooks:
+      - id: ruff
+        # 提交前允许自动修可修的（import 排序、未用导入等），剩下修不了的才报错。
+        # CI 里则不带 --fix，只判定——避免"本地自动改完就以为过了"。
+        args: [--fix]
+        types_or: [python, pyi]
+
+  # ---- mypy：类型检查（作用域 src/，配置在 pyproject.toml 的 [tool.mypy]） ----
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.17.1
+    hooks:
+      - id: mypy
+        # 不传 --files，让 mypy 读 pyproject.toml 的 files = ["src"]：
+        # 作用域只有一处定义，不会出现"本地查 src、CI 查全仓"的分叉。
+        # pass_filenames=false 否则 pre-commit 会把本次改动的文件列表覆盖上去。
+        pass_filenames: false
+        # 业务依赖不装进钩子环境：mypy 只做静态分析，缺第三方存根已由
+        # ignore_missing_imports 兜住；装了 numpy/pulp 只会拖慢每次提交。
+        additional_dependencies: []
+        args: [--ignore-missing-imports]
+
+  # ---- 基础卫生：大文件 / 冲突标记 / 行尾空白 ----
+  # 不加 end-of-file-fixer / trailing-whitespace：本仓有 1.7 万行既有代码，
+  # 一次性修会把本次缺陷修复的 diff 淹没（同 pyproject.toml 里不启用 UP 规则的理由）。
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        # 数据集与前端 vendor 里有正常的大文件，阈值放到 5 MB
+        args: [--maxkb=5120]
+      - id: check-merge-conflict
+      - id: check-yaml
+        exclude: ^licenses/          # 第三方许可证文本不是 YAML，排除以免误报
+      - id: check-json
+        exclude: ^(licenses/|web/vendor/)
+      - id: detect-private-key
+        # 本仓约定"凭据与运行期状态永不入库"，这一条把约定变成机械检查
+        exclude: ^(tests/|docs/|licenses/)
