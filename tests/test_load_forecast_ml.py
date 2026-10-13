@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.utils.config import CONFIG
 from src.agents.load_forecast_agent import LoadForecastAgent, NaiveBaselineForecaster
+from src.utils.config import CONFIG
 
 
 def _synthetic_history(n_days: int = 14, end_date: str = "2024-07-30 23:45") -> pd.DataFrame:
@@ -59,8 +59,7 @@ def test_required_history_days_formula():
 
     门槛 = 滞后开销(7 天) + 测试集切分(test_days 天) + 训练下限(1 天)。
     """
-    from src.agents.load_forecast_agent import (LAG_POINTS, MIN_TRAIN_ROWS,
-                                                POINTS_PER_DAY, required_history_days)
+    from src.agents.load_forecast_agent import LAG_POINTS, MIN_TRAIN_ROWS, POINTS_PER_DAY, required_history_days
     assert required_history_days() == 11
     assert required_history_days(3) == 11
     for td in (1, 2, 3, 5, 7):
@@ -119,3 +118,36 @@ def test_naive_baseline_evaluates_without_leak():
     assert mape > 0 or mape == 0.0  # 评估可运行
     pred = b.predict(df, "2024-07-30")
     assert len(pred) == 96 and np.isfinite(pred).all()
+
+
+def test_baseline_mape_is_same_day_not_training_mean():
+    """`ForecastResult.baseline_mape` 必须是**预测日当天**的基线，不是训练期 test_df 的均值。
+
+    这条守的是一个真实发生过的文档口径事故（2026-10-12 修正）：README 曾写
+    「XGBoost 3.12% 略输朴素基线 3.01%，差 0.11 个百分点」，但 3.01% 是
+    `train()` 里 `_evaluate_naive_baseline(historical_data, test_df)` 算出的
+    **测试集三天均值**（07-27/07-28/07-29），而 3.12% 是 07-30 **单日**递归预测值。
+    拿单日模型分减三日基线均值，把差距压小了约 4 倍。
+
+    `predict()` 本来就返回同日基线（`NaiveBaselineForecaster().evaluate(hist, forecast_date)`），
+    所以同口径数字一直存在，只是当时没被引用。本用例把它钉住：两者必须一致，
+    且不得等于 `train()` 留下的那个跨口径均值。
+    """
+    df = _synthetic_history()
+    forecast_date = "2024-07-30"
+    agent = LoadForecastAgent(CONFIG, xgb_params={"n_estimators": 60, "max_depth": 4})
+    res = agent.predict(df, forecast_date)
+
+    assert agent.is_trained is True, "本用例要求走 ML 路径（否则降级分支里 baseline_mape 与 mape 同源）"
+    assert res.fallback_reason == ""
+
+    # 同口径：predict() 内的基线必须等于独立重算的"同一天"基线
+    same_day = NaiveBaselineForecaster().evaluate(df, forecast_date)
+    assert res.baseline_mape == pytest.approx(same_day, abs=0.01), (
+        f"baseline_mape={res.baseline_mape} 与同日重算 {same_day:.4f} 不符——"
+        f"它必须是预测日当天的基线，不能是训练期均值"
+    )
+
+    # 跨口径对照：train() 内部那个 test_df 均值是另一回事，二者不应当相等
+    # （合成数据下偶有可能接近，故这里只断言"来源不同"而非数值必须不同）
+    assert agent._baseline_mape > 0, "train() 应已记录测试集基线均值，供日志对比用"

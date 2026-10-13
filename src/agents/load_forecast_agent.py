@@ -9,13 +9,18 @@
    商业建筑冷负荷增加4%-6%，工业制冷负荷增加2%-3%
 2. 工艺负荷保底：设置最低工艺用能底线，避免预测值低于生产基本需求
 """
-from src.utils.logger import get_logger
-log = get_logger(__name__)
-import numpy as np
-import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
 from src.utils.config import CONFIG
+from src.utils.logger import get_logger
+
+# 原先这行夹在两组 import 之间（`log = get_logger(...)` 在第 13 行、其余 import
+# 在它之后），ruff 的 E402 会为后面每一行报"模块级 import 不在文件顶部"。
+log = get_logger(__name__)
 
 
 @dataclass
@@ -279,7 +284,8 @@ class LoadForecastAgent:
                 self._temp_slope = float(slope)
                 self._temp_intercept = float(intercept)
                 self._temp_correction_fitted = True
-                log.info(f"[负荷预测Agent] 数据驱动修正拟合: slope={slope:.1f}kW/℃, intercept={intercept:.1f}kW, corr={corr:.3f}")
+                log.info("[负荷预测Agent] 数据驱动修正拟合: slope=%.1fkW/℃, "
+                         "intercept=%.1fkW, corr=%.3f", slope, intercept, corr)
             else:
                 # 无显著温度残差关系，设为近零（XGBoost已捕获温度效应）
                 self._temp_slope = 0.0
@@ -302,8 +308,10 @@ class LoadForecastAgent:
         """
         try:
             from xgboost import XGBRegressor
-        except ImportError:
-            raise ImportError("请先安装xgboost: pip install xgboost")
+        except ImportError as exc:
+            # from exc：保留"哪个模块没装/为什么装不上"的原始信息，
+            # 面向用户的提示只是补充可执行的装法。
+            raise ImportError("请先安装xgboost: pip install xgboost") from exc
 
         log.info("[负荷预测Agent] 构造特征...")
         df = self._create_features(historical_data)
@@ -354,15 +362,15 @@ class LoadForecastAgent:
         self._insufficient_data = False
 
         # 训练XGBoost（默认参数 + 外部覆盖）
-        _xgb_kwargs = dict(
-            n_estimators=200,
-            max_depth=6,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            verbosity=0,
-        )
+        _xgb_kwargs = {
+            "n_estimators": 200,
+            "max_depth": 6,
+            "learning_rate": 0.1,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "random_state": 42,
+            "verbosity": 0,
+        }
         _xgb_kwargs.update(self.xgb_params)
         self.model = XGBRegressor(**_xgb_kwargs)
         self.model.fit(X_train, y_train)
@@ -384,8 +392,8 @@ class LoadForecastAgent:
             self._baseline_mape = self._evaluate_naive_baseline(historical_data, test_df)
             log.info(f"[负荷预测Agent] 朴素基线(同时刻均值) MAPE: {self._baseline_mape:.2f}%")
             if self._baseline_mape > 0 and mape > self._baseline_mape:
-                log.warning(f"[负荷预测Agent] ⚠ XGBoost 未跑赢朴素基线（差 {mape - self._baseline_mape:+.2f} 个百分点），"
-                      f"建议改用直接多步预测或检查特征泄漏")
+                log.warning("[负荷预测Agent] ⚠ XGBoost 未跑赢朴素基线（差 %+.2f 个百分点），"
+                            "建议改用直接多步预测或检查特征泄漏", mape - self._baseline_mape)
 
 
             # 拟合数据驱动温度修正系数（从验证残差学习）
@@ -408,7 +416,9 @@ class LoadForecastAgent:
         if total <= 0:
             return {}
         result = {}
-        for col, imp in zip(self.feature_columns, importances):
+        # strict=True：importances 由用 self.feature_columns 训练的模型给出，
+        # 两者长度必然相等；不等说明特征列与模型不同源，静默截短会输出错误的特征重要性。
+        for col, imp in zip(self.feature_columns, importances, strict=True):
             result[col] = float(imp / total * 100)
         # 按重要性降序
         return dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
@@ -507,7 +517,9 @@ class LoadForecastAgent:
         for i in range(96):
             current_time = forecast_time_idx[i]
             tod_str = current_time.strftime("%H:%M")
-            stats = tod_stats.get(tod_str, {"mean": np.mean(recent_loads), "min": np.min(recent_loads), "max": np.max(recent_loads), "std": np.std(recent_loads)})
+            stats = tod_stats.get(tod_str, {
+                "mean": np.mean(recent_loads), "min": np.min(recent_loads),
+                "max": np.max(recent_loads), "std": np.std(recent_loads)})
 
             # 构造单条特征
             hour_float = current_time.hour + current_time.minute / 60.0
@@ -581,15 +593,17 @@ class LoadForecastAgent:
             mape_without_correction = float(np.mean(np.abs((actual_load - forecast_load) / actual_load)) * 100)
 
         # 物理修正（数据驱动模式：XGBoost已含温度特征时自动近零修正）
-        correction_magnitude = 0
+        # 用 0.0 而非 0 初始化：下面 _physical_correction 返回 float，
+        # 写成 int 会让 mypy 判"变量类型 int 收到 float"。
+        correction_magnitude = 0.0
         if apply_physical_correction:
             forecast_load, correction_magnitude = self._physical_correction(
                 forecast_load, ambient_temp, mode="data_driven"
             )
 
         # 修正后的MAPE
-        mape = 0
-        rmse = 0
+        mape = 0.0
+        rmse = 0.0
         if actual_load is not None:
             mape = float(np.mean(np.abs((actual_load - forecast_load) / actual_load)) * 100)
             rmse = float(np.sqrt(np.mean((actual_load - forecast_load) ** 2)))
@@ -644,7 +658,8 @@ class LoadForecastAgent:
                 ambient_temp[i] = 30.0
 
         # 物理修正（物理公式模式：简化预测无ML温度特征，用传热学公式）
-        correction_magnitude = 0
+        # 同样用 0.0 而非 0：_physical_correction 返回 float
+        correction_magnitude = 0.0
         if apply_physical_correction:
             forecast_load, correction_magnitude = self._physical_correction(
                 forecast_load, ambient_temp, mode="physical"
@@ -652,8 +667,8 @@ class LoadForecastAgent:
 
         # 评估
         actual_load = None
-        mape = 0
-        rmse = 0
+        mape = 0.0
+        rmse = 0.0
         forecast_day_data = historical_data[
             historical_data["timestamp"].dt.date == forecast_dt.date()
         ]
