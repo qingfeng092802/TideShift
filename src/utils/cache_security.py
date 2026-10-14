@@ -42,7 +42,10 @@ from src.utils.logger import get_logger
 _MAGIC = b"TSJ1"
 _KEY_FILE = ".cache_secret"
 _KEY_CACHE = None
-_HARDEN_WARNED = set()      # 权限收敛失败只告警一次（按路径去重）
+_HARDEN_WARNED: set = set()  # 权限收敛失败只告警一次（按路径去重）
+# 上面这个标注不是装饰：mypy 2.x 对"空集合字面量赋值给无标注变量"报
+# var-annotated（1.x 不报），而 CI 的 lint job 装的是无上界的 mypy。
+# 见 requirements-dev.txt 里 mypy 的上界说明。
 _log = get_logger("cache_security")
 
 # 缓存文件后缀（读/写/LRU 淘汰共用一处口径）
@@ -284,22 +287,34 @@ def _is_safe_cache_name(filename: str) -> bool:
     换成 `'x/../../.solve_cache/pe_<fp8>_<受害日期>'` 则正好压到另一天的缓存
     条目上，读侧命中即把毒条目当成那天结果返回（跨条目投毒）。
 
-    判据取"与 basename 相同"而不是黑名单某个分隔符：Windows 上 `\\`、`/`、
-    盘符 `C:`、UNC 前缀都能改变解析结果，逐条列举必然漏；basename 相等这一条
-    同时覆盖它们，且 `os.altsep` 为空（POSIX）时也不会误伤。
+    ⚠️ 判据**不能只靠 os.path.basename**（1.2.4 修复后由 CI 抓出来的真实缺陷）：
+    `os.sep` / `os.altsep` 是**运行平台**的属性，而这里的输入是**不可信字符串**。
+    在 Linux 上 `os.sep='/'`、`os.altsep=None`，于是
+    `posixpath.basename('..\\escape.json')` 原样返回 `'..\\escape.json'`
+    ——basename 判据认为"没有目录成分"而放行。那个名字在 Linux 上确实不构成穿越
+    （反斜杠只是普通字符），但同一个文件名会被复制/同步到 Windows 部署上，那时它
+    **就是**穿越。缓存的载荷是跨平台同步的，判据必须比运行平台更严。
+
+    所以这里**显式列出两种平台的分隔符与危险前缀**，不依赖 os.path 的平台行为：
+    - 任一种分隔符（`/` 与 `\\`）出现即拒；
+    - 盘符（`C:`）与 UNC 前缀（`\\\\` 已被上一条覆盖，这里另挡 `//`）；
+    - `.` / `..` 单独挡（basename 对它们无感）；
+    - 空字节（C 层字符串截断，会让校验与实际打开的名字不一致）。
     """
     if not filename or not isinstance(filename, str):
         return False
-    # "." / ".." 是目录本身，不是文件；basename 判据对它们无感
-    # （`os.path.basename("..")` 就是 `".."`），所以单独挡一次。
+    # "." / ".." 是目录本身，不是文件；basename 判据对它们无感，单独挡。
     if filename in (".", ".."):
         return False
-    if filename != os.path.basename(filename):
+    # 两种平台的分隔符都拒：不依赖 os.sep / os.altsep（那是运行平台的属性，
+    # 而这里要防的是"这份缓存被同步到另一个平台后"的行为）。
+    if "/" in filename or "\\" in filename:
         return False
-    # 显式再挡一次分隔符与空字节：basename 在个别平台上对尾部分隔符的行为
-    # 有差异（"a/" 的 basename 是 ""），这里不依赖那个细节。
-    if os.sep in filename or (os.altsep and os.altsep in filename):
+    # 盘符前缀（Windows 绝对路径）。用 `[1] == ':'` 而不是正则：只关心"首字符是
+    # 字母、第二个是冒号"这一种形状，写成显式判断比引正则更容易读。
+    if len(filename) >= 2 and filename[1] == ":":
         return False
+    # 空字节：C 层会在它处截断，校验看到的名字与实际打开的可能不一致。
     if "\x00" in filename:
         return False
     return True

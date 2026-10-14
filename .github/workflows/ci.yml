@@ -72,7 +72,13 @@ jobs:
       # 只装 lint 工具，不装 requirements-dev.txt：ruff/mypy 是静态分析，
       # 不需要 numpy/pulp 这些重依赖（装了反而多几十秒且与业务版本耦合）。
       # mypy 的第三方库类型缺失已由 pyproject.toml 的 ignore_missing_imports 兜住。
-      - run: pip install "ruff>=0.12.0" "mypy>=1.17.1"
+      # ⚠️ 上界必须与 requirements-dev.txt / pyproject.toml 一致（1.2.4 的真实教训）：
+      # 这里原先写的是裸 `mypy>=1.17.1`，CI 装到 **2.4.0**，而 2.x 新开了
+      # `var-annotated` 检查——`_HARDEN_WARNED = set()` 在 1.x 合法、在 2.x 报错，
+      # 于是 push 上去 lint 变红而本机（1.17.1）全绿、无法复现。
+      # 三处（本文件 / requirements-dev.txt / pyproject.toml）由
+      # tests/test_packaging.py 断言保持同步。
+      - run: pip install "ruff>=0.12.0,<1.0" "mypy>=1.17.1,<2.0"
       - run: ruff check --output-format=github .
       - run: mypy
 

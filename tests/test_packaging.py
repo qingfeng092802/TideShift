@@ -131,6 +131,57 @@ def test_lint_tools_are_declared_for_ci():
         assert tool in py_dev, f"{tool} 未在 pyproject 的 dev extra 声明"
 
 
+def test_lint_tool_version_ranges_agree_across_three_files():
+    """ruff / mypy 的版本区间必须在**三处**逐字一致，且都带上界。
+
+    这条是 1.2.4 一次真实 CI 变红换来的：`requirements-dev.txt` 与
+    `pyproject.toml` 写的是裸 `mypy>=1.17.1`（无上界），`.github/workflows/ci.yml`
+    的 lint job 也写 `mypy>=1.17.1`，于是 CI 装到了 **mypy 2.4.0**。2.x 新开了
+    `var-annotated` 检查，`_HARDEN_WARNED = set()` 这种 1.x 完全合法的写法直接报错
+    ——push 上去 lint 变红，而本机 1.17.1 全绿、无法复现。
+
+    两类缺陷都要能被这条断言拦住：
+    1. 三处区间不一致（改一处忘另一处）；
+    2. 缺上界（下一个大版本一发布，CI 就换了一套检查规则）。
+    """
+    import re as _re
+
+    def _range(spec: str):
+        m = _re.match(r"^[A-Za-z0-9_.\-]+\s*(.*)$", spec.strip())
+        return (m.group(1) or "").replace(" ", "")
+
+    txt = {}
+    for line in REQUIREMENTS_DEV.read_text(encoding="utf-8").splitlines():
+        s = line.split("#", 1)[0].strip()
+        if not s or s.startswith("-"):
+            continue
+        name, _, rest = s.partition(">=")
+        if name.strip() in ("ruff", "mypy"):
+            txt[name.strip()] = _range(name.strip() + ">=" + rest)
+
+    py = {_parse_pep508(s)[0]: _range(s) for s in
+          _load_pyproject()["project"]["optional-dependencies"]["dev"]}
+
+    ci_text = (PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    ci = {}
+    for m in _re.finditer(r'"(ruff|mypy)>=([^"]+)"', ci_text):
+        ci[m.group(1)] = ">=" + m.group(2)
+
+    for tool in ("ruff", "mypy"):
+        assert tool in txt, f"{tool} 不在 requirements-dev.txt"
+        assert tool in py, f"{tool} 不在 pyproject 的 dev extra"
+        assert tool in ci, f"{tool} 不在 ci.yml 的 lint job"
+        assert "<" in txt[tool], (
+            f"requirements-dev.txt 的 {tool} 缺上界（{txt[tool]}）——"
+            f"下一个大版本一发布，CI 就会换一套检查规则")
+        assert txt[tool] == py[tool] == ci[tool], (
+            f"{tool} 的版本区间三处不一致：\n"
+            f"  requirements-dev.txt = {txt[tool]}\n"
+            f"  pyproject.toml       = {py[tool]}\n"
+            f"  ci.yml (lint job)    = {ci[tool]}\n"
+            f"三处必须逐字相同，否则 CI 装到的版本与本机/文档不一致")
+
+
 def test_package_discovery_excludes_tests():
     """包发现范围只含 src/backend/evals，不含 tests/。"""
     include = _load_pyproject()["tool"]["setuptools"]["packages"]["find"]["include"]

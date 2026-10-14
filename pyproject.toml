@@ -69,8 +69,10 @@ dev = [
     "pytest>=9.1.1,<10.0",
     "coverage>=7.16.0,<8.0",
     "httpx>=0.28.1,<1.0",
-    "ruff>=0.12.0",
-    "mypy>=1.17.1",
+    "ruff>=0.12.0,<1.0",
+    # mypy 钉 <2.0：裸 `>=1.17.1` 会让 CI 装到 2.x，而 2.x 新开了 var-annotated
+    # 这类检查，1.x 合法的写法在 2.x 报错。详见 requirements-dev.txt 的说明。
+    "mypy>=1.17.1,<2.0",
 ]
 
 [project.scripts]

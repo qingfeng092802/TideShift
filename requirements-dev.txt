@@ -15,5 +15,11 @@ httpx>=0.28.1,<1.0        # fastapi.testclient 的底层 HTTP 客户端
 # ---- 静态检查（CI 的 lint job 与 .pre-commit-config.yaml 共用同一套） ----
 # 这两条只做静态分析，不 import 业务依赖；版本区间与 pyproject.toml 的
 # [project.optional-dependencies] dev 保持一致，避免两处漂移。
-ruff>=0.12.0
-mypy>=1.17.1
+ruff>=0.12.0,<1.0
+# ⚠️ mypy 必须钉上界（1.2.4 的真实教训）：这里原先写的是裸 `mypy>=1.17.1`，
+# CI 于是装到了 **2.4.0**，而 2.x 新开了 `var-annotated` 这类检查——
+# `_HARDEN_WARNED = set()` 这种在 1.x 完全合法的写法在 2.x 直接报错，
+# 结果 push 上去的 CI 在 lint job 上变红，而本机（1.17.1）全绿、无法复现。
+# 钉 <2.0 的含义是"跨大版本升级必须是一次显式动作"：真要升 2.x 时，
+# 先在本机装 2.x 跑一遍 mypy，把新报的问题修掉再放宽上界。
+mypy>=1.17.1,<2.0
